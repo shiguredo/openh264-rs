@@ -84,6 +84,25 @@ if let Some(frame) = encoder.encode(&y_data, &u_data, &v_data)? {
 }
 ```
 
+## テスト
+
+テストの実行には OpenH264 共有ライブラリが必要です。
+環境変数 `OPENH264_PATH` にライブラリのパスを指定してください。
+
+```bash
+OPENH264_PATH=/path/to/libopenh264.dylib cargo test
+```
+
+## サンプル
+
+`examples/animate.rs` は raden で描画したアニメーションを OpenH264 でエンコードし MP4 ファイルに出力するサンプルです。
+
+```bash
+OPENH264_PATH=/path/to/libopenh264.dylib cargo run --example animate
+```
+
+実行すると `output.mp4` が生成されます。
+
 ## ライセンス
 
 Apache License 2.0
