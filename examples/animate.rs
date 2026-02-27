@@ -1,11 +1,11 @@
+use mp4::{AvcConfig, Bytes, MediaConfig, Mp4Config, Mp4Sample, Mp4Writer, TrackConfig, TrackType};
+use raden::{Circle, Context, Image, PipelineRuntime, PixelFormat, Rgba32};
+use shiguredo_openh264::{
+    EncodeOptions, EncodedFrame, Encoder, EncoderConfig, Openh264Library, Profile, RateControlMode,
+};
 use std::env;
 use std::fs::File;
 use std::io::BufWriter;
-use std::num::NonZeroUsize;
-
-use mp4::{AvcConfig, Bytes, MediaConfig, Mp4Config, Mp4Sample, Mp4Writer, TrackConfig, TrackType};
-use raden::{Circle, Context, Image, PipelineRuntime, PixelFormat, Rgba32};
-use shiguredo_openh264::{Encoder, EncoderConfig, Openh264Library};
 
 const WIDTH: u32 = 640;
 const HEIGHT: u32 = 480;
@@ -21,16 +21,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let lib = Openh264Library::load(&openh264_path)?;
     let config = EncoderConfig {
-        width: WIDTH as usize,
-        height: HEIGHT as usize,
-        fps_numerator: FPS as usize,
-        fps_denominator: 1,
-        target_bitrate: 1_000_000,
+        profile: Some(Profile::ConstrainedBaseline),
         intra_period: Some(30),
-        ref_frame_count: NonZeroUsize::MIN,
-        ..Default::default()
+        rate_control_mode: Some(RateControlMode::Bitrate),
+        ..EncoderConfig::new(WIDTH as usize, HEIGHT as usize, 1_000_000, FPS as usize, 1)
     };
-    let mut encoder = Encoder::new(lib, &config)?;
+    let mut encoder = Encoder::new(lib, config)?;
 
     let mut runtime = PipelineRuntime::new();
     let mut img = Image::new(WIDTH, HEIGHT, PixelFormat::Prgb32);
@@ -41,7 +37,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut u_buf = vec![0u8; w.div_ceil(2) * h.div_ceil(2)];
     let mut v_buf = vec![0u8; w.div_ceil(2) * h.div_ceil(2)];
 
-    let mut encoded_frames: Vec<(Vec<u8>, bool)> = Vec::with_capacity(TOTAL_FRAMES as usize);
+    let mut encoded_frames: Vec<EncodedFrame> = Vec::with_capacity(TOTAL_FRAMES as usize);
 
     let mut ball_x: f64 = 100.0;
     let mut ball_y: f64 = 100.0;
@@ -83,12 +79,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         prgb32_to_i420(img.data(), w, h, &mut y_buf, &mut u_buf, &mut v_buf);
 
         // エンコード
-        if let Some(encoded) = encoder.encode(&y_buf, &u_buf, &v_buf)? {
-            encoded_frames.push((encoded.data, encoded.keyframe));
+        if let Some(encoded) = encoder.encode(&y_buf, &u_buf, &v_buf, &EncodeOptions::default())? {
+            encoded_frames.push(encoded);
         }
     }
 
-    // 最初のキーフレームから SPS/PPS を抽出
+    // 最初の IDR フレームから SPS/PPS を取得
     let (sps, pps) = extract_sps_pps(&encoded_frames)?;
 
     // MP4 ファイルに書き出し
@@ -195,6 +191,32 @@ fn unpremultiply(r_pre: u8, g_pre: u8, b_pre: u8, a: u8) -> (u8, u8, u8) {
     (r, g, b)
 }
 
+/// エンコード済みフレームから SPS と PPS を取得する
+fn extract_sps_pps(
+    frames: &[EncodedFrame],
+) -> Result<(Vec<u8>, Vec<u8>), Box<dyn std::error::Error>> {
+    for frame in frames {
+        if !frame.sps_list.is_empty() && !frame.pps_list.is_empty() {
+            return Ok((frame.sps_list[0].clone(), frame.pps_list[0].clone()));
+        }
+    }
+    Err("SPS/PPS not found in any frame".into())
+}
+
+/// Annex.B 形式を AVCC 形式に変換する
+///
+/// `EncodedFrame.data` には SPS/PPS が含まれないため、全 NALU を変換対象とする。
+fn annexb_to_avcc(data: &[u8]) -> Vec<u8> {
+    let mut avcc = Vec::new();
+    let nalus = extract_nalus(data);
+    for nalu in nalus {
+        let len = nalu.len() as u32;
+        avcc.extend_from_slice(&len.to_be_bytes());
+        avcc.extend_from_slice(nalu);
+    }
+    avcc
+}
+
 /// Annex.B ストリームからスタートコードの位置を検索する
 fn find_start_code(data: &[u8], start: usize) -> Option<(usize, usize)> {
     let mut i = start;
@@ -233,57 +255,10 @@ fn extract_nalus(data: &[u8]) -> Vec<&[u8]> {
     nalus
 }
 
-/// エンコード済みフレームから SPS と PPS を抽出する
-fn extract_sps_pps(
-    frames: &[(Vec<u8>, bool)],
-) -> Result<(Vec<u8>, Vec<u8>), Box<dyn std::error::Error>> {
-    for (data, keyframe) in frames {
-        if !keyframe {
-            continue;
-        }
-        let mut sps = None;
-        let mut pps = None;
-        for nalu in extract_nalus(data) {
-            if nalu.is_empty() {
-                continue;
-            }
-            let nal_type = nalu[0] & 0x1F;
-            match nal_type {
-                7 => sps = Some(nalu.to_vec()),
-                8 => pps = Some(nalu.to_vec()),
-                _ => {}
-            }
-        }
-        if let (Some(sps), Some(pps)) = (sps, pps) {
-            return Ok((sps, pps));
-        }
-    }
-    Err("SPS/PPS not found in any keyframe".into())
-}
-
-/// Annex.B 形式を AVCC 形式に変換する (SPS/PPS を除外)
-fn annexb_to_avcc(data: &[u8]) -> Vec<u8> {
-    let mut avcc = Vec::new();
-    for nalu in extract_nalus(data) {
-        if nalu.is_empty() {
-            continue;
-        }
-        let nal_type = nalu[0] & 0x1F;
-        // SPS(7) と PPS(8) は AvcConfig に含めるので除外
-        if nal_type == 7 || nal_type == 8 {
-            continue;
-        }
-        let len = nalu.len() as u32;
-        avcc.extend_from_slice(&len.to_be_bytes());
-        avcc.extend_from_slice(nalu);
-    }
-    avcc
-}
-
 /// MP4 ファイルに書き出す
 fn write_mp4(
     path: &str,
-    frames: &[(Vec<u8>, bool)],
+    frames: &[EncodedFrame],
     sps: &[u8],
     pps: &[u8],
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -317,13 +292,14 @@ fn write_mp4(
     };
     mp4.add_track(&track_config)?;
 
-    for (i, (data, is_sync)) in frames.iter().enumerate() {
-        let avcc_data = annexb_to_avcc(data);
+    for (i, frame) in frames.iter().enumerate() {
+        let avcc_data = annexb_to_avcc(&frame.data);
+        let is_sync = frame.frame_type == shiguredo_openh264::FrameType::Idr;
         let sample = Mp4Sample {
             start_time: i as u64 * SAMPLE_DURATION as u64,
             duration: SAMPLE_DURATION,
             rendering_offset: 0,
-            is_sync: *is_sync,
+            is_sync,
             bytes: Bytes::from(avcc_data),
         };
         mp4.write_sample(1, &sample)?;

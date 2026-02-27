@@ -5,7 +5,6 @@
 
 use std::{
     ffi::{c_int, c_longlong, c_uint, c_ushort},
-    marker::PhantomData,
     mem::MaybeUninit,
     num::NonZeroUsize,
     path::{Path, PathBuf},
@@ -21,12 +20,6 @@ pub const BUILD_VERSION: &str = sys::BUILD_METADATA_VERSION;
 
 /// ビルド時に参照した OpenH264 のリポジトリ URL
 pub const BUILD_REPOSITORY: &str = sys::BUILD_METADATA_REPOSITORY;
-
-// エンコード時のレベル
-const LEVEL: sys::ELevelIdc = sys::ELevelIdc_LEVEL_3_1;
-
-// エンコード時のプロファイル
-const PROFILE: sys::EProfileIdc = sys::EProfileIdc_PRO_BASELINE;
 
 /// エラー
 #[derive(Debug)]
@@ -74,6 +67,96 @@ impl std::fmt::Display for Error {
 }
 
 impl std::error::Error for Error {}
+
+/// H.264 プロファイル
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Profile {
+    /// Constrained Baseline プロファイル
+    ConstrainedBaseline,
+    /// Baseline プロファイル
+    Baseline,
+    /// Main プロファイル
+    Main,
+    /// High プロファイル
+    High,
+}
+
+/// H.264 レベル
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(missing_docs)]
+pub enum Level {
+    /// Level 1.0
+    L1,
+    /// Level 1.1
+    L1_1,
+    /// Level 1.2
+    L1_2,
+    /// Level 1.3
+    L1_3,
+    /// Level 2.0
+    L2,
+    /// Level 2.1
+    L2_1,
+    /// Level 2.2
+    L2_2,
+    /// Level 3.0
+    L3,
+    /// Level 3.1
+    L3_1,
+    /// Level 3.2
+    L3_2,
+    /// Level 4.0
+    L4,
+    /// Level 4.1
+    L4_1,
+    /// Level 4.2
+    L4_2,
+    /// Level 5.0
+    L5,
+    /// Level 5.1
+    L5_1,
+    /// Level 5.2
+    L5_2,
+}
+
+/// エントロピー符号化モード
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EntropyCodingMode {
+    /// CAVLC (Context-Adaptive Variable-Length Coding)
+    Cavlc,
+    /// CABAC (Context-Adaptive Binary Arithmetic Coding)
+    Cabac,
+}
+
+/// エンコードされた映像フレームのタイプ
+///
+/// OpenH264 の `EVideoFrameType` に対応する。
+/// `Skip` は `encode()` が `None` を返すケースに対応するので含めない。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FrameType {
+    /// IDR フレーム (NAL unit type 5)
+    ///
+    /// デコーダーがこのポイントから新規デコード開始可能。
+    /// SPS/PPS が付随する。
+    Idr,
+
+    /// I フレーム (NAL unit type 1, イントラスライス)
+    I,
+
+    /// P フレーム (NAL unit type 1, インタースライス)
+    P,
+}
+
+/// エンコード時のオプション
+///
+/// フレームごとに異なるオプションを指定可能。
+#[derive(Debug, Clone, Default)]
+pub struct EncodeOptions {
+    /// 次のフレームを強制的に IDR フレームとしてエンコードする
+    ///
+    /// OpenH264 の `ForceIntraFrame(bIDR=true)` に対応する。
+    pub force_idr: bool,
+}
 
 /// openh264 用の共有ライブラリを管理するための構造体
 #[derive(Debug, Clone)]
@@ -185,7 +268,7 @@ impl Decoder {
     /// 圧縮された映像フレーム（Annex.B 形式）をデコードする
     ///
     /// B フレームは存在しない前提（つまり入力と出力の順番が一致する）
-    pub fn decode(&mut self, data: &[u8]) -> Result<Option<DecodedFrame<'_>>, Error> {
+    pub fn decode(&mut self, data: &[u8]) -> Result<Option<DecodedFrame>, Error> {
         let mut info = MaybeUninit::<sys::SBufferInfo>::zeroed();
         unsafe {
             let mut yuv = [std::ptr::null_mut(); 3];
@@ -217,15 +300,12 @@ impl Decoder {
                 });
             }
 
-            Ok(Some(DecodedFrame {
-                info,
-                _lifetime: PhantomData,
-            }))
+            Ok(Some(DecodedFrame::from_buffer_info(&info)))
         }
     }
 
     /// これ以上データが来ないことをデコーダーに伝えて残りの結果を取得する
-    pub fn finish(&mut self) -> Result<Option<DecodedFrame<'_>>, Error> {
+    pub fn finish(&mut self) -> Result<Option<DecodedFrame>, Error> {
         let mut info = MaybeUninit::<sys::SBufferInfo>::zeroed();
         unsafe {
             let mut yuv = [std::ptr::null_mut(); 3];
@@ -253,10 +333,7 @@ impl Decoder {
                 });
             }
 
-            Ok(Some(DecodedFrame {
-                info,
-                _lifetime: PhantomData,
-            }))
+            Ok(Some(DecodedFrame::from_buffer_info(&info)))
         }
     }
 }
@@ -277,74 +354,96 @@ impl Drop for Decoder {
 unsafe impl Send for Decoder {}
 
 /// デコードされた映像フレーム (I420 形式)
-pub struct DecodedFrame<'a> {
-    info: sys::SBufferInfo,
-
-    // info の中には openh264 が返した一時的なデータへの参照も含まれているので、
-    // このライフタイムで利用側での使用範囲を制限する。
-    _lifetime: PhantomData<&'a ()>,
+///
+/// YUV データを所有しているため、デコーダーのライフタイムに依存しない。
+#[derive(Debug, Clone)]
+pub struct DecodedFrame {
+    width: usize,
+    height: usize,
+    y_stride: usize,
+    u_stride: usize,
+    v_stride: usize,
+    y_data: Vec<u8>,
+    u_data: Vec<u8>,
+    v_data: Vec<u8>,
 }
 
-impl DecodedFrame<'_> {
+impl DecodedFrame {
+    /// OpenH264 の `SBufferInfo` から YUV データをコピーして `DecodedFrame` を構築する
+    unsafe fn from_buffer_info(info: &sys::SBufferInfo) -> Self {
+        unsafe {
+            let width = info.UsrData.sSystemBuffer.iWidth as usize;
+            let height = info.UsrData.sSystemBuffer.iHeight as usize;
+            let y_stride = info.UsrData.sSystemBuffer.iStride[0] as usize;
+            let u_stride = info.UsrData.sSystemBuffer.iStride[1] as usize;
+            let v_stride = u_stride;
+
+            let y_size = height * y_stride;
+            let uv_height = height.div_ceil(2);
+            let u_size = uv_height * u_stride;
+            let v_size = uv_height * v_stride;
+
+            let y_data = std::slice::from_raw_parts(info.pDst[0], y_size).to_vec();
+            let u_data = std::slice::from_raw_parts(info.pDst[1], u_size).to_vec();
+            let v_data = std::slice::from_raw_parts(info.pDst[2], v_size).to_vec();
+
+            Self {
+                width,
+                height,
+                y_stride,
+                u_stride,
+                v_stride,
+                y_data,
+                u_data,
+                v_data,
+            }
+        }
+    }
+
     /// フレームの Y 成分のデータを返す
     pub fn y_plane(&self) -> &[u8] {
-        unsafe { std::slice::from_raw_parts(self.info.pDst[0], self.height() * self.y_stride()) }
+        &self.y_data
     }
 
     /// フレームの U 成分のデータを返す
     pub fn u_plane(&self) -> &[u8] {
-        unsafe {
-            std::slice::from_raw_parts(
-                self.info.pDst[1],
-                self.height().div_ceil(2) * self.u_stride(),
-            )
-        }
+        &self.u_data
     }
 
     /// フレームの V 成分のデータを返す
     pub fn v_plane(&self) -> &[u8] {
-        unsafe {
-            std::slice::from_raw_parts(
-                self.info.pDst[2],
-                self.height().div_ceil(2) * self.v_stride(),
-            )
-        }
+        &self.v_data
     }
 
     /// フレームの Y 成分のストライドを返す
     pub fn y_stride(&self) -> usize {
-        unsafe { self.info.UsrData.sSystemBuffer.iStride[0] as usize }
+        self.y_stride
     }
 
     /// フレームの U 成分のストライドを返す
     pub fn u_stride(&self) -> usize {
-        unsafe { self.info.UsrData.sSystemBuffer.iStride[1] as usize }
+        self.u_stride
     }
 
     /// フレームの V 成分のストライドを返す
     pub fn v_stride(&self) -> usize {
-        // U と V のストライドは等しい
-        unsafe { self.info.UsrData.sSystemBuffer.iStride[1] as usize }
+        self.v_stride
     }
 
     /// フレームの幅を返す
     pub fn width(&self) -> usize {
-        unsafe { self.info.UsrData.sSystemBuffer.iWidth as usize }
+        self.width
     }
 
     /// フレームの高さを返す
     pub fn height(&self) -> usize {
-        unsafe { self.info.UsrData.sSystemBuffer.iHeight as usize }
-    }
-}
-
-impl std::fmt::Debug for DecodedFrame<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("DecodedFrame").finish_non_exhaustive()
+        self.height
     }
 }
 
 /// エンコーダーに指定する設定
+///
+/// 必須フィールド以外は `None` で OpenH264 の `GetDefaultParams` の値がそのまま使われる。
 #[derive(Debug, Clone)]
 pub struct EncoderConfig {
     /// 入出力画像の幅
@@ -362,63 +461,108 @@ pub struct EncoderConfig {
     /// FPS の分母
     pub fps_denominator: usize,
 
-    /// 複雑度モード (LOW_COMPLEXITY, MEDIUM_COMPLEXITY, HIGH_COMPLEXITY)
-    pub complexity_mode: ComplexityMode,
+    /// H.264 プロファイル (None: OpenH264 自動検出)
+    pub profile: Option<Profile>,
 
-    /// エントロピー符号化モード (false: CAVLC, true: CABAC)
-    pub entropy_coding: bool,
+    /// H.264 レベル (None: OpenH264 自動検出)
+    pub level: Option<Level>,
 
-    /// 参照フレーム数 (1で最高速)
-    pub ref_frame_count: NonZeroUsize,
+    /// エントロピー符号化モード (None: CAVLC)
+    pub entropy_coding_mode: Option<EntropyCodingMode>,
 
-    /// マルチスレッド数 (None なら自動)
+    /// 複雑度モード (None: LOW_COMPLEXITY)
+    pub complexity_mode: Option<ComplexityMode>,
+
+    /// 参照フレーム数 (None: OpenH264 自動選択)
+    pub ref_frame_count: Option<NonZeroUsize>,
+
+    /// マルチスレッド数 (None: OpenH264 デフォルト)
     pub thread_count: Option<NonZeroUsize>,
 
-    /// 空間レイヤー数 (1で最高速)
-    pub spatial_layers: NonZeroUsize,
+    /// 空間レイヤー数 (None: 1)
+    pub spatial_layers: Option<NonZeroUsize>,
 
-    /// 時間レイヤー数 (1で最高速)
-    pub temporal_layers: NonZeroUsize,
+    /// 時間レイヤー数 (None: 1)
+    pub temporal_layers: Option<NonZeroUsize>,
 
-    /// Intra フレーム間隔
+    /// Intra フレーム間隔 (None: OpenH264 デフォルト)
     pub intra_period: Option<usize>,
 
-    /// レート制御モード
-    pub rate_control_mode: RateControlMode,
+    /// レート制御モード (None: RC_QUALITY_MODE)
+    pub rate_control_mode: Option<RateControlMode>,
 
-    /// 最大QP値
-    pub max_qp: usize,
+    /// 最大 QP 値 (None: 51)
+    pub max_qp: Option<usize>,
 
-    /// 最小QP値
-    pub min_qp: usize,
+    /// 最小 QP 値 (None: 0)
+    pub min_qp: Option<usize>,
 
-    /// ノイズ除去機能
-    pub denoise: bool,
+    /// ノイズ除去機能 (None: false)
+    pub denoise: Option<bool>,
 
-    /// 背景検出機能
-    pub background_detection: bool,
+    /// 背景検出機能 (None: true)
+    pub background_detection: Option<bool>,
 
-    /// 適応量子化機能
-    pub adaptive_quantization: bool,
+    /// 適応量子化機能 (None: true)
+    pub adaptive_quantization: Option<bool>,
 
-    /// シーン変化検出機能
-    pub scene_change_detection: bool,
+    /// シーン変化検出機能 (None: true)
+    pub scene_change_detection: Option<bool>,
 
-    /// デブロッキングフィルタ
-    pub deblocking_filter: bool,
+    /// デブロッキングフィルタ (None: true)
+    pub deblocking_filter: Option<bool>,
 
-    /// 長期参照フレーム機能
-    pub long_term_reference: bool,
+    /// 長期参照フレーム機能 (None: false)
+    pub long_term_reference: Option<bool>,
 
-    /// スライスモード
-    pub slice_mode: SliceMode,
+    /// スライスモード (None: SM_SINGLE_SLICE)
+    pub slice_mode: Option<SliceMode>,
+}
+
+impl EncoderConfig {
+    /// 必須フィールドのみを指定して `EncoderConfig` を生成する
+    ///
+    /// オプションフィールドはすべて `None` (OpenH264 のデフォルト値) になる。
+    pub fn new(
+        width: usize,
+        height: usize,
+        target_bitrate: usize,
+        fps_numerator: usize,
+        fps_denominator: usize,
+    ) -> Self {
+        Self {
+            width,
+            height,
+            target_bitrate,
+            fps_numerator,
+            fps_denominator,
+            profile: None,
+            level: None,
+            entropy_coding_mode: None,
+            complexity_mode: None,
+            ref_frame_count: None,
+            thread_count: None,
+            spatial_layers: None,
+            temporal_layers: None,
+            intra_period: None,
+            rate_control_mode: None,
+            max_qp: None,
+            min_qp: None,
+            denoise: None,
+            background_detection: None,
+            adaptive_quantization: None,
+            scene_change_detection: None,
+            deblocking_filter: None,
+            long_term_reference: None,
+            slice_mode: None,
+        }
+    }
 }
 
 /// 複雑度モード
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ComplexityMode {
     /// 最低複雑度 (最高速)
-    #[default]
     Low,
     /// 中程度複雑度
     Medium,
@@ -427,12 +571,11 @@ pub enum ComplexityMode {
 }
 
 /// レート制御モード
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RateControlMode {
     /// レート制御無効 (最高速)
     Off,
     /// 品質モード
-    #[default]
     Quality,
     /// ビットレートモード
     Bitrate,
@@ -441,10 +584,9 @@ pub enum RateControlMode {
 }
 
 /// スライスモード
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SliceMode {
     /// 単一スライス (最高速)
-    #[default]
     Single,
     /// 固定スライス数
     FixedCount(usize),
@@ -452,35 +594,35 @@ pub enum SliceMode {
     SizeConstrained(usize),
 }
 
-impl Default for EncoderConfig {
-    fn default() -> Self {
-        Self {
-            width: 1920,
-            height: 1080,
-            target_bitrate: 2_000_000,
-            fps_numerator: 30,
-            fps_denominator: 1,
+impl Profile {
+    fn to_sys(self) -> sys::EProfileIdc {
+        match self {
+            Profile::ConstrainedBaseline | Profile::Baseline => sys::EProfileIdc_PRO_BASELINE,
+            Profile::Main => sys::EProfileIdc_PRO_MAIN,
+            Profile::High => sys::EProfileIdc_PRO_HIGH,
+        }
+    }
+}
 
-            // バランス重視の高速化設定
-            complexity_mode: ComplexityMode::Low,
-            entropy_coding: false, // CAVLC
-            ref_frame_count: NonZeroUsize::MIN,
-            thread_count: None, // 自動
-            spatial_layers: NonZeroUsize::MIN,
-            temporal_layers: NonZeroUsize::MIN,
-            intra_period: Some(60),
-            rate_control_mode: RateControlMode::Bitrate,
-            max_qp: 40,
-            min_qp: 10,
-
-            // 最低限の前処理機能のみ有効
-            denoise: false,
-            background_detection: false,
-            adaptive_quantization: false,
-            scene_change_detection: false,
-            deblocking_filter: true, // 品質維持のため有効
-            long_term_reference: false,
-            slice_mode: SliceMode::Single,
+impl Level {
+    fn to_sys(self) -> sys::ELevelIdc {
+        match self {
+            Level::L1 => sys::ELevelIdc_LEVEL_1_0,
+            Level::L1_1 => sys::ELevelIdc_LEVEL_1_1,
+            Level::L1_2 => sys::ELevelIdc_LEVEL_1_2,
+            Level::L1_3 => sys::ELevelIdc_LEVEL_1_3,
+            Level::L2 => sys::ELevelIdc_LEVEL_2_0,
+            Level::L2_1 => sys::ELevelIdc_LEVEL_2_1,
+            Level::L2_2 => sys::ELevelIdc_LEVEL_2_2,
+            Level::L3 => sys::ELevelIdc_LEVEL_3_0,
+            Level::L3_1 => sys::ELevelIdc_LEVEL_3_1,
+            Level::L3_2 => sys::ELevelIdc_LEVEL_3_2,
+            Level::L4 => sys::ELevelIdc_LEVEL_4_0,
+            Level::L4_1 => sys::ELevelIdc_LEVEL_4_1,
+            Level::L4_2 => sys::ELevelIdc_LEVEL_4_2,
+            Level::L5 => sys::ELevelIdc_LEVEL_5_0,
+            Level::L5_1 => sys::ELevelIdc_LEVEL_5_1,
+            Level::L5_2 => sys::ELevelIdc_LEVEL_5_2,
         }
     }
 }
@@ -498,7 +640,7 @@ pub struct Encoder {
 
 impl Encoder {
     /// エンコーダーインスタンスを生成する
-    pub fn new(lib: Openh264Library, config: &EncoderConfig) -> Result<Self, Error> {
+    pub fn new(lib: Openh264Library, config: EncoderConfig) -> Result<Self, Error> {
         let mut inner = std::ptr::null_mut();
         let mut param = MaybeUninit::<sys::SEncParamExt>::zeroed();
         let pic = MaybeUninit::<sys::SSourcePicture>::zeroed();
@@ -517,92 +659,126 @@ impl Encoder {
 
             let mut param = param.assume_init();
 
-            // 基本設定
+            // 必須設定
             param.iUsageType = sys::EUsageType_CAMERA_VIDEO_REAL_TIME;
             param.fMaxFrameRate = config.fps_numerator as f32 / config.fps_denominator as f32;
             param.iPicWidth = config.width as c_int;
             param.iPicHeight = config.height as c_int;
             param.iTargetBitrate = config.target_bitrate as c_int;
 
-            // 複雑度モード設定
-            param.iComplexityMode = match config.complexity_mode {
-                ComplexityMode::Low => sys::ECOMPLEXITY_MODE_LOW_COMPLEXITY,
-                ComplexityMode::Medium => sys::ECOMPLEXITY_MODE_MEDIUM_COMPLEXITY,
-                ComplexityMode::High => sys::ECOMPLEXITY_MODE_HIGH_COMPLEXITY,
-            };
+            // 以下は None なら GetDefaultParams の値をそのまま使う
 
-            // エントロピー符号化設定
-            param.iEntropyCodingModeFlag = if config.entropy_coding { 1 } else { 0 };
+            if let Some(mode) = config.complexity_mode {
+                param.iComplexityMode = match mode {
+                    ComplexityMode::Low => sys::ECOMPLEXITY_MODE_LOW_COMPLEXITY,
+                    ComplexityMode::Medium => sys::ECOMPLEXITY_MODE_MEDIUM_COMPLEXITY,
+                    ComplexityMode::High => sys::ECOMPLEXITY_MODE_HIGH_COMPLEXITY,
+                };
+            }
 
-            // 参照フレーム数設定
-            param.iNumRefFrame = config.ref_frame_count.get() as c_int;
+            if let Some(mode) = config.entropy_coding_mode {
+                param.iEntropyCodingModeFlag = match mode {
+                    EntropyCodingMode::Cavlc => 0,
+                    EntropyCodingMode::Cabac => 1,
+                };
+            }
 
-            // マルチスレッド設定
-            param.iMultipleThreadIdc = config.thread_count.map_or(0, |v| v.get()) as c_ushort;
+            if let Some(count) = config.ref_frame_count {
+                param.iNumRefFrame = count.get() as c_int;
+            }
 
-            // 空間レイヤー数設定
-            param.iSpatialLayerNum = config.spatial_layers.get() as c_int;
+            if let Some(count) = config.thread_count {
+                param.iMultipleThreadIdc = count.get() as c_ushort;
+            }
 
-            // 時間レイヤー数設定
-            param.iTemporalLayerNum = config.temporal_layers.get() as c_int;
+            if let Some(layers) = config.spatial_layers {
+                param.iSpatialLayerNum = layers.get() as c_int;
+            }
 
-            // Intra期間設定
+            if let Some(layers) = config.temporal_layers {
+                param.iTemporalLayerNum = layers.get() as c_int;
+            }
+
             if let Some(intra) = config.intra_period {
                 param.uiIntraPeriod = intra as c_uint;
             }
 
-            // レート制御モード設定
-            param.iRCMode = match config.rate_control_mode {
-                RateControlMode::Off => sys::RC_MODES_RC_OFF_MODE,
-                RateControlMode::Quality => sys::RC_MODES_RC_QUALITY_MODE,
-                RateControlMode::Bitrate => sys::RC_MODES_RC_BITRATE_MODE,
-                RateControlMode::Timestamp => sys::RC_MODES_RC_TIMESTAMP_MODE,
-            };
+            if let Some(mode) = config.rate_control_mode {
+                param.iRCMode = match mode {
+                    RateControlMode::Off => sys::RC_MODES_RC_OFF_MODE,
+                    RateControlMode::Quality => sys::RC_MODES_RC_QUALITY_MODE,
+                    RateControlMode::Bitrate => sys::RC_MODES_RC_BITRATE_MODE,
+                    RateControlMode::Timestamp => sys::RC_MODES_RC_TIMESTAMP_MODE,
+                };
+            }
 
-            // QP設定
-            param.iMaxQp = config.max_qp as i32;
-            param.iMinQp = config.min_qp as i32;
+            if let Some(qp) = config.max_qp {
+                param.iMaxQp = qp as i32;
+            }
 
-            // 前処理機能設定
-            param.bEnableDenoise = config.denoise;
-            param.bEnableBackgroundDetection = config.background_detection;
-            param.bEnableAdaptiveQuant = config.adaptive_quantization;
-            param.bEnableSceneChangeDetect = config.scene_change_detection;
+            if let Some(qp) = config.min_qp {
+                param.iMinQp = qp as i32;
+            }
 
-            // デブロッキングフィルタ設定
-            param.iLoopFilterDisableIdc = if config.deblocking_filter { 0 } else { 1 };
+            if let Some(v) = config.denoise {
+                param.bEnableDenoise = v;
+            }
 
-            // 長期参照フレーム設定
-            if config.long_term_reference {
-                param.bEnableLongTermReference = true;
-                param.iLTRRefNum = 1; // 基本的に1つの長期参照フレーム
-            } else {
-                param.bEnableLongTermReference = false;
-                param.iLTRRefNum = 0;
+            if let Some(v) = config.background_detection {
+                param.bEnableBackgroundDetection = v;
+            }
+
+            if let Some(v) = config.adaptive_quantization {
+                param.bEnableAdaptiveQuant = v;
+            }
+
+            if let Some(v) = config.scene_change_detection {
+                param.bEnableSceneChangeDetect = v;
+            }
+
+            if let Some(v) = config.deblocking_filter {
+                param.iLoopFilterDisableIdc = if v { 0 } else { 1 };
+            }
+
+            if let Some(v) = config.long_term_reference {
+                if v {
+                    param.bEnableLongTermReference = true;
+                    param.iLTRRefNum = 1;
+                } else {
+                    param.bEnableLongTermReference = false;
+                    param.iLTRRefNum = 0;
+                }
             }
 
             // 空間レイヤー設定
             for layer in &mut param.sSpatialLayers[..param.iSpatialLayerNum as usize] {
-                layer.uiLevelIdc = LEVEL;
-                layer.uiProfileIdc = PROFILE;
+                if let Some(profile) = config.profile {
+                    layer.uiProfileIdc = profile.to_sys();
+                }
+                if let Some(level) = config.level {
+                    layer.uiLevelIdc = level.to_sys();
+                }
                 layer.iVideoWidth = config.width as c_int;
                 layer.iVideoHeight = config.height as c_int;
                 layer.fFrameRate = param.fMaxFrameRate;
                 layer.iSpatialBitrate = config.target_bitrate as c_int;
-                layer.iMaxSpatialBitrate = (config.target_bitrate * 2) as c_int; // 2倍をmax値として設定
+                layer.iMaxSpatialBitrate = (config.target_bitrate * 2) as c_int;
 
-                // スライスモード設定
-                match config.slice_mode {
-                    SliceMode::Single => {
-                        layer.sSliceArgument.uiSliceMode = sys::SliceModeEnum_SM_SINGLE_SLICE;
-                    }
-                    SliceMode::FixedCount(count) => {
-                        layer.sSliceArgument.uiSliceMode = sys::SliceModeEnum_SM_FIXEDSLCNUM_SLICE;
-                        layer.sSliceArgument.uiSliceNum = count as c_uint;
-                    }
-                    SliceMode::SizeConstrained(size) => {
-                        layer.sSliceArgument.uiSliceMode = sys::SliceModeEnum_SM_SIZELIMITED_SLICE;
-                        layer.sSliceArgument.uiSliceSizeConstraint = size as c_uint;
+                if let Some(slice_mode) = config.slice_mode {
+                    match slice_mode {
+                        SliceMode::Single => {
+                            layer.sSliceArgument.uiSliceMode = sys::SliceModeEnum_SM_SINGLE_SLICE;
+                        }
+                        SliceMode::FixedCount(count) => {
+                            layer.sSliceArgument.uiSliceMode =
+                                sys::SliceModeEnum_SM_FIXEDSLCNUM_SLICE;
+                            layer.sSliceArgument.uiSliceNum = count as c_uint;
+                        }
+                        SliceMode::SizeConstrained(size) => {
+                            layer.sSliceArgument.uiSliceMode =
+                                sys::SliceModeEnum_SM_SIZELIMITED_SLICE;
+                            layer.sSliceArgument.uiSliceSizeConstraint = size as c_uint;
+                        }
                     }
                 }
             }
@@ -648,7 +824,13 @@ impl Encoder {
     /// なお `y` のストライドは入力フレームの幅と等しいことが前提
     ///
     /// また B フレームは扱わない前提（つまり入力フレームと出力フレームの順番が一致する）
-    pub fn encode(&mut self, y: &[u8], u: &[u8], v: &[u8]) -> Result<Option<EncodedFrame>, Error> {
+    pub fn encode(
+        &mut self,
+        y: &[u8],
+        u: &[u8],
+        v: &[u8],
+        options: &EncodeOptions,
+    ) -> Result<Option<EncodedFrame>, Error> {
         let height = self.pic.iPicHeight as usize;
         let y_size = height * self.pic.iStride[0] as usize;
         let u_size = height.div_ceil(2) * self.pic.iStride[1] as usize;
@@ -658,6 +840,17 @@ impl Encoder {
         }
 
         unsafe {
+            // ForceIntraFrame 処理
+            if options.force_idr {
+                let name = "ISVCEncoder.ForceIntraFrame";
+                let code = (**self.inner)
+                    .ForceIntraFrame
+                    .ok_or(Error::UnavailableMethod(name))?(
+                    self.inner, true
+                );
+                Error::check(code, name)?;
+            }
+
             self.pic.pData[0] = y.as_ptr().cast_mut();
             self.pic.pData[1] = u.as_ptr().cast_mut();
             self.pic.pData[2] = v.as_ptr().cast_mut();
@@ -683,7 +876,17 @@ impl Encoder {
                 return Ok(None);
             }
 
+            let frame_type = match info.eFrameType {
+                sys::EVideoFrameType_videoFrameTypeIDR => FrameType::Idr,
+                sys::EVideoFrameType_videoFrameTypeI => FrameType::I,
+                _ => FrameType::P,
+            };
+
+            // SPS/PPS を分離して EncodedFrame を構築
+            let mut sps_list = Vec::new();
+            let mut pps_list = Vec::new();
             let mut data = Vec::new();
+
             for layer_info in &info.sLayerInfo[..info.iLayerNum as usize] {
                 if layer_info.iNalCount == 0 {
                     // カウントがゼロの場合には、環境によっては、
@@ -692,18 +895,49 @@ impl Encoder {
                     continue;
                 }
 
-                let data_size = std::slice::from_raw_parts(
+                let nal_lengths = std::slice::from_raw_parts(
                     layer_info.pNalLengthInByte,
                     layer_info.iNalCount as usize,
-                )
-                .iter()
-                .map(|n| *n as usize)
-                .sum::<usize>();
-                data.extend_from_slice(std::slice::from_raw_parts(layer_info.pBsBuf, data_size));
+                );
+
+                let mut offset = 0usize;
+                for &nal_len in nal_lengths {
+                    let nal_len = nal_len as usize;
+                    let nal_data =
+                        std::slice::from_raw_parts(layer_info.pBsBuf.add(offset), nal_len);
+
+                    // Annex B スタートコードをスキップして NALU 本体を取得
+                    let nalu_body = skip_start_code(nal_data);
+
+                    if !nalu_body.is_empty() {
+                        let nal_type = nalu_body[0] & 0x1F;
+                        match nal_type {
+                            7 => {
+                                // SPS: スタートコードを除いた NALU 本体を保存
+                                sps_list.push(nalu_body.to_vec());
+                            }
+                            8 => {
+                                // PPS: スタートコードを除いた NALU 本体を保存
+                                pps_list.push(nalu_body.to_vec());
+                            }
+                            _ => {
+                                // その他の NALU: Annex B 形式のまま data に追加
+                                data.extend_from_slice(nal_data);
+                            }
+                        }
+                    } else {
+                        // パースできない場合はそのまま data に追加
+                        data.extend_from_slice(nal_data);
+                    }
+
+                    offset += nal_len;
+                }
             }
 
             Ok(Some(EncodedFrame {
-                keyframe: info.eFrameType == sys::EVideoFrameType_videoFrameTypeIDR,
+                frame_type,
+                sps_list,
+                pps_list,
                 data,
             }))
         }
@@ -727,13 +961,30 @@ impl Drop for Encoder {
 
 unsafe impl Send for Encoder {}
 
+/// Annex B スタートコード (0x00000001 または 0x000001) をスキップして NALU 本体を返す
+fn skip_start_code(data: &[u8]) -> &[u8] {
+    if data.len() >= 4 && data[0] == 0 && data[1] == 0 && data[2] == 0 && data[3] == 1 {
+        &data[4..]
+    } else if data.len() >= 3 && data[0] == 0 && data[1] == 0 && data[2] == 1 {
+        &data[3..]
+    } else {
+        data
+    }
+}
+
 /// エンコードされた映像フレーム
 #[derive(Debug)]
 pub struct EncodedFrame {
-    /// キーフレームかどうか
-    pub keyframe: bool,
+    /// フレームタイプ
+    pub frame_type: FrameType,
 
-    /// 圧縮データ
+    /// SPS (IDR フレーム時のみ含まれる)
+    pub sps_list: Vec<Vec<u8>>,
+
+    /// PPS (IDR フレーム時のみ含まれる)
+    pub pps_list: Vec<Vec<u8>>,
+
+    /// 圧縮データ (Annex B 形式、SPS/PPS の NALU を除外)
     pub data: Vec<u8>,
 }
 
@@ -795,15 +1046,8 @@ mod tests {
         };
 
         let lib = Openh264Library::load(path).expect("load library error");
-        let config = EncoderConfig {
-            fps_denominator: 1,
-            fps_numerator: 1,
-            width: 64,
-            height: 64,
-            target_bitrate: 100_000,
-            ..Default::default()
-        };
-        assert!(Encoder::new(lib, &config).is_ok());
+        let config = EncoderConfig::new(64, 64, 100_000, 1, 1);
+        assert!(Encoder::new(lib, config).is_ok());
     }
 
     #[test]
@@ -813,18 +1057,21 @@ mod tests {
         };
 
         let lib = Openh264Library::load(path).expect("load library error");
-        let config = EncoderConfig {
-            fps_denominator: 1,
-            fps_numerator: 1,
-            width: 64,
-            height: 64,
-            target_bitrate: 100_000,
-            ..Default::default()
-        };
-        let mut encoder = Encoder::new(lib, &config).expect("create encoder error");
+        let config = EncoderConfig::new(64, 64, 100_000, 1, 1);
+        let mut encoder = Encoder::new(lib, config).expect("create encoder error");
         let encoded = encoder
-            .encode(&[0; 64 * 64], &[0; 32 * 32], &[0; 32 * 32])
+            .encode(
+                &[0; 64 * 64],
+                &[0; 32 * 32],
+                &[0; 32 * 32],
+                &EncodeOptions::default(),
+            )
             .expect("encode error");
         assert!(encoded.is_some());
+        let encoded = encoded.unwrap();
+        assert_eq!(encoded.frame_type, FrameType::Idr);
+        assert!(!encoded.sps_list.is_empty());
+        assert!(!encoded.pps_list.is_empty());
+        assert!(!encoded.data.is_empty());
     }
 }
