@@ -48,7 +48,7 @@ println!("OpenH264 version: {}", lib.runtime_version());
 ### デコード
 
 ```rust
-use shiguredo_openh264::{Openh264Library, Decoder};
+use shiguredo_openh264::{Decoder, Openh264Library};
 
 let lib = Openh264Library::load("/path/to/libopenh264.so")?;
 let mut decoder = Decoder::new(lib)?;
@@ -61,27 +61,44 @@ if let Some(frame) = decoder.decode(&h264_data)? {
     let width = frame.width();
     let height = frame.height();
 }
+
+// 残りのフレームをフラッシュ
+if let Some(frame) = decoder.finish()? {
+    // ...
+}
 ```
 
 ### エンコード
 
 ```rust
-use shiguredo_openh264::{Openh264Library, Encoder, EncoderConfig};
+use shiguredo_openh264::{EncodeOptions, Encoder, EncoderConfig, FrameType, Openh264Library};
 
 let lib = Openh264Library::load("/path/to/libopenh264.so")?;
-let config = EncoderConfig {
-    width: 1920,
-    height: 1080,
-    target_bitrate: 2_000_000,
-    ..Default::default()
-};
-let mut encoder = Encoder::new(lib, &config)?;
+let config = EncoderConfig::new(1920, 1080, 2_000_000, 30, 1);
+let mut encoder = Encoder::new(lib, config)?;
 
 // I420 形式の YUV データをエンコード
-if let Some(frame) = encoder.encode(&y_data, &u_data, &v_data)? {
-    let is_keyframe = frame.keyframe;
+if let Some(frame) = encoder.encode(&y_data, &u_data, &v_data, &EncodeOptions::default())? {
     let compressed = &frame.data;
+
+    // IDR フレーム時のみ SPS/PPS が含まれる
+    if frame.frame_type == FrameType::Idr {
+        let sps = &frame.sps_list[0];
+        let pps = &frame.pps_list[0];
+    }
 }
+```
+
+オプションを指定する場合:
+
+```rust
+use shiguredo_openh264::{EncoderConfig, Profile, RateControlMode};
+
+let config = EncoderConfig {
+    profile: Some(Profile::Main),
+    rate_control_mode: Some(RateControlMode::Bitrate),
+    ..EncoderConfig::new(1920, 1080, 2_000_000, 30, 1)
+};
 ```
 
 ## テスト
