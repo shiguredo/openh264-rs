@@ -922,6 +922,54 @@ impl Encoder {
         }
     }
 
+    /// 解像度を動的に変更する
+    ///
+    /// OpenH264 の `SetOption(ENCODER_OPTION_SVC_ENCODE_PARAM_EXT)` で
+    /// 現在のパラメーターを維持したまま解像度のみ変更する。
+    pub fn set_resolution(&mut self, width: usize, height: usize) -> Result<(), Error> {
+        unsafe {
+            let mut param = MaybeUninit::<sys::SEncParamExt>::zeroed();
+            let name = "ISVCEncoder.GetOption";
+            let code = (**self.inner)
+                .GetOption
+                .ok_or(Error::UnavailableMethod(name))?(
+                self.inner,
+                sys::ENCODER_OPTION_ENCODER_OPTION_SVC_ENCODE_PARAM_EXT,
+                param.as_mut_ptr().cast(),
+            );
+            Error::check(code as c_int, name)?;
+
+            let mut param = param.assume_init();
+            param.iPicWidth = width as c_int;
+            param.iPicHeight = height as c_int;
+
+            // 空間レイヤーの解像度も更新する
+            for layer in &mut param.sSpatialLayers[..param.iSpatialLayerNum as usize] {
+                layer.iVideoWidth = width as c_int;
+                layer.iVideoHeight = height as c_int;
+            }
+
+            let name = "ISVCEncoder.SetOption";
+            let code = (**self.inner)
+                .SetOption
+                .ok_or(Error::UnavailableMethod(name))?(
+                self.inner,
+                sys::ENCODER_OPTION_ENCODER_OPTION_SVC_ENCODE_PARAM_EXT,
+                std::ptr::from_mut(&mut param).cast(),
+            );
+            Error::check(code as c_int, name)?;
+
+            // 内部の画像設定を更新する
+            self.pic.iPicWidth = width as c_int;
+            self.pic.iPicHeight = height as c_int;
+            self.pic.iStride[0] = width as c_int;
+            self.pic.iStride[1] = width.div_ceil(2) as c_int;
+            self.pic.iStride[2] = width.div_ceil(2) as c_int;
+
+            Ok(())
+        }
+    }
+
     /// I420 (YUV 4:2:0 planar) 形式の画像データをエンコードする
     ///
     /// OpenH264 のエンコーダーは I420 のみ受け付ける。
