@@ -21,6 +21,7 @@ Cisco の [OpenH264](https://github.com/cisco/openh264) を Rust から利用す
 ## 特徴
 
 - H.264 エンコーダー/デコーダーの安全な Rust ラッパー
+- 入出力フォーマットは I420 (YUV 4:2:0 planar) 固定 (OpenH264 の仕様)
 - 実行時に OpenH264 共有ライブラリを動的ロード (`dlopen` / `LoadLibraryW`)
   - ビルド時のリンク不要
 - ランタイム依存は `log` クレートのみ
@@ -47,8 +48,8 @@ println!("OpenH264 version: {}", lib.runtime_version());
 
 ### エンコード
 
-入力フォーマットは I420 (YUV 4:2:0 planar) のみ対応しています。
-Y, U, V プレーンを個別に渡します。
+入力は I420 (YUV 4:2:0 planar) 形式で、Y, U, V プレーンを個別に渡します。
+出力は Annex.B 形式の H.264 データです。
 
 ```rust
 use shiguredo_openh264::{EncodeOptions, Encoder, EncoderConfig, FrameType, Openh264Library};
@@ -83,7 +84,7 @@ let config = EncoderConfig {
 
 ### デコード
 
-入力は Annex.B 形式の H.264 データで、出力は I420 (YUV 4:2:0 planar) です。
+入力は Annex.B 形式の H.264 データで、出力は I420 (YUV 4:2:0 planar) 形式です。
 
 ```rust
 use shiguredo_openh264::{Decoder, Openh264Library};

@@ -1,5 +1,8 @@
 //! [OpenH264] の Rust バインディング
 //!
+//! 入出力フォーマットは I420 (YUV 4:2:0 planar) 固定。
+//! これは OpenH264 エンコーダー・デコーダー双方の仕様による制約。
+//!
 //! [OpenH264]: https://github.com/cisco/openh264
 #![warn(missing_docs)]
 
@@ -265,9 +268,10 @@ impl Decoder {
         }
     }
 
-    /// 圧縮された映像フレーム（Annex.B 形式）をデコードする
+    /// Annex.B 形式の H.264 データをデコードする
     ///
-    /// B フレームは存在しない前提（つまり入力と出力の順番が一致する）
+    /// 出力は I420 (YUV 4:2:0 planar) 形式。OpenH264 のデコーダーは I420 のみ出力する。
+    /// B フレームは存在しない前提（入力と出力の順番が一致する）。
     pub fn decode(&mut self, data: &[u8]) -> Result<Option<DecodedFrame>, Error> {
         let mut info = MaybeUninit::<sys::SBufferInfo>::zeroed();
         unsafe {
@@ -353,7 +357,7 @@ impl Drop for Decoder {
 
 unsafe impl Send for Decoder {}
 
-/// デコードされた映像フレーム (I420 形式)
+/// デコードされた映像フレーム (I420 / YUV 4:2:0 planar 形式)
 ///
 /// YUV データを所有しているため、デコーダーのライフタイムに依存しない。
 #[derive(Debug, Clone)]
@@ -819,11 +823,11 @@ impl Encoder {
         }
     }
 
-    /// I420 形式の画像データをエンコードする
+    /// I420 (YUV 4:2:0 planar) 形式の画像データをエンコードする
     ///
-    /// なお `y` のストライドは入力フレームの幅と等しいことが前提
-    ///
-    /// また B フレームは扱わない前提（つまり入力フレームと出力フレームの順番が一致する）
+    /// OpenH264 のエンコーダーは I420 のみ受け付ける。
+    /// `y` のストライドは入力フレームの幅と等しいことが前提。
+    /// B フレームは扱わない前提（入力フレームと出力フレームの順番が一致する）。
     pub fn encode(
         &mut self,
         y: &[u8],
