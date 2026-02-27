@@ -36,6 +36,8 @@
   - `set_resolution()` で解像度を動的に変更する
   - `set_config()` で全パラメーターを一括変更する
   - @voluntas
+- [CHANGE] ビルド依存の `toml` クレートを `shiguredo_toml` に置き換える
+  - @voluntas
 
 ## 2025.1.0
 
