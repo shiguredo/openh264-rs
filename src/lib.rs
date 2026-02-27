@@ -642,6 +642,132 @@ pub struct Encoder {
     fps_denominator: usize,
 }
 
+/// `EncoderConfig` の内容を `SEncParamExt` に反映する
+///
+/// `new()` と `reconfigure()` の共通処理。
+fn apply_config_to_param(param: &mut sys::SEncParamExt, config: &EncoderConfig) {
+    param.iUsageType = sys::EUsageType_CAMERA_VIDEO_REAL_TIME;
+    param.fMaxFrameRate = config.fps_numerator as f32 / config.fps_denominator as f32;
+    param.iPicWidth = config.width as c_int;
+    param.iPicHeight = config.height as c_int;
+    param.iTargetBitrate = config.target_bitrate as c_int;
+
+    // 以下は None なら既存値 (GetDefaultParams の値) をそのまま使う
+
+    if let Some(mode) = config.complexity_mode {
+        param.iComplexityMode = match mode {
+            ComplexityMode::Low => sys::ECOMPLEXITY_MODE_LOW_COMPLEXITY,
+            ComplexityMode::Medium => sys::ECOMPLEXITY_MODE_MEDIUM_COMPLEXITY,
+            ComplexityMode::High => sys::ECOMPLEXITY_MODE_HIGH_COMPLEXITY,
+        };
+    }
+
+    if let Some(mode) = config.entropy_coding_mode {
+        param.iEntropyCodingModeFlag = match mode {
+            EntropyCodingMode::Cavlc => 0,
+            EntropyCodingMode::Cabac => 1,
+        };
+    }
+
+    if let Some(count) = config.ref_frame_count {
+        param.iNumRefFrame = count.get() as c_int;
+    }
+
+    if let Some(count) = config.thread_count {
+        param.iMultipleThreadIdc = count.get() as c_ushort;
+    }
+
+    if let Some(layers) = config.spatial_layers {
+        param.iSpatialLayerNum = layers.get() as c_int;
+    }
+
+    if let Some(layers) = config.temporal_layers {
+        param.iTemporalLayerNum = layers.get() as c_int;
+    }
+
+    if let Some(intra) = config.intra_period {
+        param.uiIntraPeriod = intra as c_uint;
+    }
+
+    if let Some(mode) = config.rate_control_mode {
+        param.iRCMode = match mode {
+            RateControlMode::Off => sys::RC_MODES_RC_OFF_MODE,
+            RateControlMode::Quality => sys::RC_MODES_RC_QUALITY_MODE,
+            RateControlMode::Bitrate => sys::RC_MODES_RC_BITRATE_MODE,
+            RateControlMode::Timestamp => sys::RC_MODES_RC_TIMESTAMP_MODE,
+        };
+    }
+
+    if let Some(qp) = config.max_qp {
+        param.iMaxQp = qp as i32;
+    }
+
+    if let Some(qp) = config.min_qp {
+        param.iMinQp = qp as i32;
+    }
+
+    if let Some(v) = config.denoise {
+        param.bEnableDenoise = v;
+    }
+
+    if let Some(v) = config.background_detection {
+        param.bEnableBackgroundDetection = v;
+    }
+
+    if let Some(v) = config.adaptive_quantization {
+        param.bEnableAdaptiveQuant = v;
+    }
+
+    if let Some(v) = config.scene_change_detection {
+        param.bEnableSceneChangeDetect = v;
+    }
+
+    if let Some(v) = config.deblocking_filter {
+        param.iLoopFilterDisableIdc = if v { 0 } else { 1 };
+    }
+
+    if let Some(v) = config.long_term_reference {
+        if v {
+            param.bEnableLongTermReference = true;
+            param.iLTRRefNum = 1;
+        } else {
+            param.bEnableLongTermReference = false;
+            param.iLTRRefNum = 0;
+        }
+    }
+
+    // 空間レイヤー設定
+    for layer in &mut param.sSpatialLayers[..param.iSpatialLayerNum as usize] {
+        if let Some(profile) = config.profile {
+            layer.uiProfileIdc = profile.to_sys();
+        }
+        if let Some(level) = config.level {
+            layer.uiLevelIdc = level.to_sys();
+        }
+        layer.iVideoWidth = config.width as c_int;
+        layer.iVideoHeight = config.height as c_int;
+        layer.fFrameRate = param.fMaxFrameRate;
+        layer.iSpatialBitrate = config.target_bitrate as c_int;
+        layer.iMaxSpatialBitrate = (config.target_bitrate * 2) as c_int;
+
+        if let Some(slice_mode) = config.slice_mode {
+            match slice_mode {
+                SliceMode::Single => {
+                    layer.sSliceArgument.uiSliceMode = sys::SliceModeEnum_SM_SINGLE_SLICE;
+                }
+                SliceMode::FixedCount(count) => {
+                    layer.sSliceArgument.uiSliceMode = sys::SliceModeEnum_SM_FIXEDSLCNUM_SLICE;
+                    layer.sSliceArgument.uiSliceNum = count as c_uint;
+                }
+                SliceMode::SizeConstrained(size) => {
+                    layer.sSliceArgument.uiSliceMode = sys::SliceModeEnum_SM_SIZELIMITED_SLICE;
+                    layer.sSliceArgument.uiSliceSizeConstraint = size as c_uint;
+                }
+            }
+        }
+    }
+}
+
 impl Encoder {
     /// エンコーダーインスタンスを生成する
     pub fn new(lib: Openh264Library, config: EncoderConfig) -> Result<Self, Error> {
@@ -662,130 +788,7 @@ impl Encoder {
             Error::check(code, name)?;
 
             let mut param = param.assume_init();
-
-            // 必須設定
-            param.iUsageType = sys::EUsageType_CAMERA_VIDEO_REAL_TIME;
-            param.fMaxFrameRate = config.fps_numerator as f32 / config.fps_denominator as f32;
-            param.iPicWidth = config.width as c_int;
-            param.iPicHeight = config.height as c_int;
-            param.iTargetBitrate = config.target_bitrate as c_int;
-
-            // 以下は None なら GetDefaultParams の値をそのまま使う
-
-            if let Some(mode) = config.complexity_mode {
-                param.iComplexityMode = match mode {
-                    ComplexityMode::Low => sys::ECOMPLEXITY_MODE_LOW_COMPLEXITY,
-                    ComplexityMode::Medium => sys::ECOMPLEXITY_MODE_MEDIUM_COMPLEXITY,
-                    ComplexityMode::High => sys::ECOMPLEXITY_MODE_HIGH_COMPLEXITY,
-                };
-            }
-
-            if let Some(mode) = config.entropy_coding_mode {
-                param.iEntropyCodingModeFlag = match mode {
-                    EntropyCodingMode::Cavlc => 0,
-                    EntropyCodingMode::Cabac => 1,
-                };
-            }
-
-            if let Some(count) = config.ref_frame_count {
-                param.iNumRefFrame = count.get() as c_int;
-            }
-
-            if let Some(count) = config.thread_count {
-                param.iMultipleThreadIdc = count.get() as c_ushort;
-            }
-
-            if let Some(layers) = config.spatial_layers {
-                param.iSpatialLayerNum = layers.get() as c_int;
-            }
-
-            if let Some(layers) = config.temporal_layers {
-                param.iTemporalLayerNum = layers.get() as c_int;
-            }
-
-            if let Some(intra) = config.intra_period {
-                param.uiIntraPeriod = intra as c_uint;
-            }
-
-            if let Some(mode) = config.rate_control_mode {
-                param.iRCMode = match mode {
-                    RateControlMode::Off => sys::RC_MODES_RC_OFF_MODE,
-                    RateControlMode::Quality => sys::RC_MODES_RC_QUALITY_MODE,
-                    RateControlMode::Bitrate => sys::RC_MODES_RC_BITRATE_MODE,
-                    RateControlMode::Timestamp => sys::RC_MODES_RC_TIMESTAMP_MODE,
-                };
-            }
-
-            if let Some(qp) = config.max_qp {
-                param.iMaxQp = qp as i32;
-            }
-
-            if let Some(qp) = config.min_qp {
-                param.iMinQp = qp as i32;
-            }
-
-            if let Some(v) = config.denoise {
-                param.bEnableDenoise = v;
-            }
-
-            if let Some(v) = config.background_detection {
-                param.bEnableBackgroundDetection = v;
-            }
-
-            if let Some(v) = config.adaptive_quantization {
-                param.bEnableAdaptiveQuant = v;
-            }
-
-            if let Some(v) = config.scene_change_detection {
-                param.bEnableSceneChangeDetect = v;
-            }
-
-            if let Some(v) = config.deblocking_filter {
-                param.iLoopFilterDisableIdc = if v { 0 } else { 1 };
-            }
-
-            if let Some(v) = config.long_term_reference {
-                if v {
-                    param.bEnableLongTermReference = true;
-                    param.iLTRRefNum = 1;
-                } else {
-                    param.bEnableLongTermReference = false;
-                    param.iLTRRefNum = 0;
-                }
-            }
-
-            // 空間レイヤー設定
-            for layer in &mut param.sSpatialLayers[..param.iSpatialLayerNum as usize] {
-                if let Some(profile) = config.profile {
-                    layer.uiProfileIdc = profile.to_sys();
-                }
-                if let Some(level) = config.level {
-                    layer.uiLevelIdc = level.to_sys();
-                }
-                layer.iVideoWidth = config.width as c_int;
-                layer.iVideoHeight = config.height as c_int;
-                layer.fFrameRate = param.fMaxFrameRate;
-                layer.iSpatialBitrate = config.target_bitrate as c_int;
-                layer.iMaxSpatialBitrate = (config.target_bitrate * 2) as c_int;
-
-                if let Some(slice_mode) = config.slice_mode {
-                    match slice_mode {
-                        SliceMode::Single => {
-                            layer.sSliceArgument.uiSliceMode = sys::SliceModeEnum_SM_SINGLE_SLICE;
-                        }
-                        SliceMode::FixedCount(count) => {
-                            layer.sSliceArgument.uiSliceMode =
-                                sys::SliceModeEnum_SM_FIXEDSLCNUM_SLICE;
-                            layer.sSliceArgument.uiSliceNum = count as c_uint;
-                        }
-                        SliceMode::SizeConstrained(size) => {
-                            layer.sSliceArgument.uiSliceMode =
-                                sys::SliceModeEnum_SM_SIZELIMITED_SLICE;
-                            layer.sSliceArgument.uiSliceSizeConstraint = size as c_uint;
-                        }
-                    }
-                }
-            }
+            apply_config_to_param(&mut param, &config);
 
             let name = "ISVCEncoder.InitializeExt";
             let code = (**inner)
@@ -820,6 +823,102 @@ impl Encoder {
                 fps_numerator: config.fps_numerator,
                 fps_denominator: config.fps_denominator,
             })
+        }
+    }
+
+    /// エンコーダーのパラメーターを動的に変更する
+    ///
+    /// 解像度、ビットレート、フレームレート等を含む全パラメーターを再設定する。
+    /// OpenH264 の `SetOption(ENCODER_OPTION_SVC_ENCODE_PARAM_EXT)` を使用するため、
+    /// エンコーダーの再生成よりも軽量。
+    pub fn set_config(&mut self, config: EncoderConfig) -> Result<(), Error> {
+        unsafe {
+            // 現在のパラメーターを取得して config を適用する
+            let mut param = MaybeUninit::<sys::SEncParamExt>::zeroed();
+            let name = "ISVCEncoder.GetOption";
+            let code = (**self.inner)
+                .GetOption
+                .ok_or(Error::UnavailableMethod(name))?(
+                self.inner,
+                sys::ENCODER_OPTION_ENCODER_OPTION_SVC_ENCODE_PARAM_EXT,
+                param.as_mut_ptr().cast(),
+            );
+            Error::check(code as c_int, name)?;
+
+            let mut param = param.assume_init();
+            apply_config_to_param(&mut param, &config);
+
+            let name = "ISVCEncoder.SetOption";
+            let code = (**self.inner)
+                .SetOption
+                .ok_or(Error::UnavailableMethod(name))?(
+                self.inner,
+                sys::ENCODER_OPTION_ENCODER_OPTION_SVC_ENCODE_PARAM_EXT,
+                std::ptr::from_mut(&mut param).cast(),
+            );
+            Error::check(code as c_int, name)?;
+
+            // 内部の画像設定を更新する
+            self.pic.iPicWidth = config.width as c_int;
+            self.pic.iPicHeight = config.height as c_int;
+            self.pic.iStride[0] = config.width as c_int;
+            self.pic.iStride[1] = config.width.div_ceil(2) as c_int;
+            self.pic.iStride[2] = config.width.div_ceil(2) as c_int;
+
+            self.fps_numerator = config.fps_numerator;
+            self.fps_denominator = config.fps_denominator;
+
+            Ok(())
+        }
+    }
+
+    /// ビットレートを動的に変更する
+    ///
+    /// OpenH264 の `SetOption(ENCODER_OPTION_BITRATE)` を使用する。
+    /// 全空間レイヤーに対して一括で適用される。
+    pub fn set_bitrate(&mut self, bitrate: usize) -> Result<(), Error> {
+        unsafe {
+            let mut info = sys::SBitrateInfo {
+                iLayer: sys::LAYER_NUM_SPATIAL_LAYER_ALL,
+                iBitrate: bitrate as c_int,
+            };
+            let name = "ISVCEncoder.SetOption";
+            let code = (**self.inner)
+                .SetOption
+                .ok_or(Error::UnavailableMethod(name))?(
+                self.inner,
+                sys::ENCODER_OPTION_ENCODER_OPTION_BITRATE,
+                std::ptr::from_mut(&mut info).cast(),
+            );
+            Error::check(code as c_int, name)?;
+            Ok(())
+        }
+    }
+
+    /// フレームレートを動的に変更する
+    ///
+    /// OpenH264 の `SetOption(ENCODER_OPTION_FRAME_RATE)` を使用する。
+    pub fn set_frame_rate(
+        &mut self,
+        fps_numerator: usize,
+        fps_denominator: usize,
+    ) -> Result<(), Error> {
+        unsafe {
+            let mut fps = fps_numerator as f32 / fps_denominator as f32;
+            let name = "ISVCEncoder.SetOption";
+            let code = (**self.inner)
+                .SetOption
+                .ok_or(Error::UnavailableMethod(name))?(
+                self.inner,
+                sys::ENCODER_OPTION_ENCODER_OPTION_FRAME_RATE,
+                std::ptr::from_mut(&mut fps).cast(),
+            );
+            Error::check(code as c_int, name)?;
+
+            self.fps_numerator = fps_numerator;
+            self.fps_denominator = fps_denominator;
+
+            Ok(())
         }
     }
 
