@@ -45,30 +45,10 @@ let lib = Openh264Library::load("/path/to/libopenh264.so")?;
 println!("OpenH264 version: {}", lib.runtime_version());
 ```
 
-### デコード
-
-```rust
-use shiguredo_openh264::{Decoder, Openh264Library};
-
-let lib = Openh264Library::load("/path/to/libopenh264.so")?;
-let mut decoder = Decoder::new(lib)?;
-
-// Annex.B 形式の H.264 データをデコード
-if let Some(frame) = decoder.decode(&h264_data)? {
-    let y = frame.y_plane();
-    let u = frame.u_plane();
-    let v = frame.v_plane();
-    let width = frame.width();
-    let height = frame.height();
-}
-
-// 残りのフレームをフラッシュ
-if let Some(frame) = decoder.finish()? {
-    // ...
-}
-```
-
 ### エンコード
+
+入力フォーマットは I420 (YUV 4:2:0 planar) のみ対応しています。
+Y, U, V プレーンを個別に渡します。
 
 ```rust
 use shiguredo_openh264::{EncodeOptions, Encoder, EncoderConfig, FrameType, Openh264Library};
@@ -99,6 +79,31 @@ let config = EncoderConfig {
     rate_control_mode: Some(RateControlMode::Bitrate),
     ..EncoderConfig::new(1920, 1080, 2_000_000, 30, 1)
 };
+```
+
+### デコード
+
+入力は Annex.B 形式の H.264 データで、出力は I420 (YUV 4:2:0 planar) です。
+
+```rust
+use shiguredo_openh264::{Decoder, Openh264Library};
+
+let lib = Openh264Library::load("/path/to/libopenh264.so")?;
+let mut decoder = Decoder::new(lib)?;
+
+// Annex.B 形式の H.264 データをデコード
+if let Some(frame) = decoder.decode(&h264_data)? {
+    let y = frame.y_plane();
+    let u = frame.u_plane();
+    let v = frame.v_plane();
+    let width = frame.width();
+    let height = frame.height();
+}
+
+// 残りのフレームをフラッシュ
+if let Some(frame) = decoder.finish()? {
+    // ...
+}
 ```
 
 ## テスト
