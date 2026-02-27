@@ -116,8 +116,8 @@ fn git_clone_external_lib(build_dir: &Path, git_url: &str, version: &str) {
 
 // Cargo.toml から依存ライブラリの Git URL とバージョンタグを取得する
 fn get_git_url_and_version() -> (String, String) {
-    let cargo_toml: toml::Value =
-        toml::from_str(include_str!("Cargo.toml")).expect("failed to parse Cargo.toml");
+    let cargo_toml =
+        shiguredo_toml::from_str(include_str!("Cargo.toml")).expect("failed to parse Cargo.toml");
     let deps = cargo_toml
         .get("package")
         .and_then(|v| v.get("metadata"))
