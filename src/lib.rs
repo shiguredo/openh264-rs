@@ -826,52 +826,6 @@ impl Encoder {
         }
     }
 
-    /// エンコーダーのパラメーターを動的に変更する
-    ///
-    /// 解像度、ビットレート、フレームレート等を含む全パラメーターを再設定する。
-    /// OpenH264 の `SetOption(ENCODER_OPTION_SVC_ENCODE_PARAM_EXT)` を使用するため、
-    /// エンコーダーの再生成よりも軽量。
-    pub fn set_config(&mut self, config: EncoderConfig) -> Result<(), Error> {
-        unsafe {
-            // 現在のパラメーターを取得して config を適用する
-            let mut param = MaybeUninit::<sys::SEncParamExt>::zeroed();
-            let name = "ISVCEncoder.GetOption";
-            let code = (**self.inner)
-                .GetOption
-                .ok_or(Error::UnavailableMethod(name))?(
-                self.inner,
-                sys::ENCODER_OPTION_ENCODER_OPTION_SVC_ENCODE_PARAM_EXT,
-                param.as_mut_ptr().cast(),
-            );
-            Error::check(code as c_int, name)?;
-
-            let mut param = param.assume_init();
-            apply_config_to_param(&mut param, &config);
-
-            let name = "ISVCEncoder.SetOption";
-            let code = (**self.inner)
-                .SetOption
-                .ok_or(Error::UnavailableMethod(name))?(
-                self.inner,
-                sys::ENCODER_OPTION_ENCODER_OPTION_SVC_ENCODE_PARAM_EXT,
-                std::ptr::from_mut(&mut param).cast(),
-            );
-            Error::check(code as c_int, name)?;
-
-            // 内部の画像設定を更新する
-            self.pic.iPicWidth = config.width as c_int;
-            self.pic.iPicHeight = config.height as c_int;
-            self.pic.iStride[0] = config.width as c_int;
-            self.pic.iStride[1] = config.width.div_ceil(2) as c_int;
-            self.pic.iStride[2] = config.width.div_ceil(2) as c_int;
-
-            self.fps_numerator = config.fps_numerator;
-            self.fps_denominator = config.fps_denominator;
-
-            Ok(())
-        }
-    }
-
     /// ビットレートを動的に変更する
     ///
     /// OpenH264 の `SetOption(ENCODER_OPTION_BITRATE)` を使用する。
@@ -943,7 +897,6 @@ impl Encoder {
             param.iPicWidth = width as c_int;
             param.iPicHeight = height as c_int;
 
-            // 空間レイヤーの解像度も更新する
             for layer in &mut param.sSpatialLayers[..param.iSpatialLayerNum as usize] {
                 layer.iVideoWidth = width as c_int;
                 layer.iVideoHeight = height as c_int;
@@ -959,12 +912,55 @@ impl Encoder {
             );
             Error::check(code as c_int, name)?;
 
-            // 内部の画像設定を更新する
             self.pic.iPicWidth = width as c_int;
             self.pic.iPicHeight = height as c_int;
             self.pic.iStride[0] = width as c_int;
             self.pic.iStride[1] = width.div_ceil(2) as c_int;
             self.pic.iStride[2] = width.div_ceil(2) as c_int;
+
+            Ok(())
+        }
+    }
+
+    /// エンコーダーの全パラメーターを動的に変更する
+    ///
+    /// 解像度、ビットレート、フレームレート等を含む全パラメーターを再設定する。
+    /// OpenH264 の `SetOption(ENCODER_OPTION_SVC_ENCODE_PARAM_EXT)` を使用するため、
+    /// エンコーダーの再生成よりも軽量。
+    pub fn set_config(&mut self, config: EncoderConfig) -> Result<(), Error> {
+        unsafe {
+            let mut param = MaybeUninit::<sys::SEncParamExt>::zeroed();
+            let name = "ISVCEncoder.GetOption";
+            let code = (**self.inner)
+                .GetOption
+                .ok_or(Error::UnavailableMethod(name))?(
+                self.inner,
+                sys::ENCODER_OPTION_ENCODER_OPTION_SVC_ENCODE_PARAM_EXT,
+                param.as_mut_ptr().cast(),
+            );
+            Error::check(code as c_int, name)?;
+
+            let mut param = param.assume_init();
+            apply_config_to_param(&mut param, &config);
+
+            let name = "ISVCEncoder.SetOption";
+            let code = (**self.inner)
+                .SetOption
+                .ok_or(Error::UnavailableMethod(name))?(
+                self.inner,
+                sys::ENCODER_OPTION_ENCODER_OPTION_SVC_ENCODE_PARAM_EXT,
+                std::ptr::from_mut(&mut param).cast(),
+            );
+            Error::check(code as c_int, name)?;
+
+            self.pic.iPicWidth = config.width as c_int;
+            self.pic.iPicHeight = config.height as c_int;
+            self.pic.iStride[0] = config.width as c_int;
+            self.pic.iStride[1] = config.width.div_ceil(2) as c_int;
+            self.pic.iStride[2] = config.width.div_ceil(2) as c_int;
+
+            self.fps_numerator = config.fps_numerator;
+            self.fps_denominator = config.fps_denominator;
 
             Ok(())
         }

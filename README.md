@@ -107,6 +107,56 @@ if let Some(frame) = decoder.finish()? {
 }
 ```
 
+## 動的パラメーター変更
+
+WebRTC やアダプティブビットレートストリーミングなど、ストリーム中にパラメーターが変わるユースケースに対応しています。
+
+### エンコーダー
+
+`set_resolution()` / `set_bitrate()` / `set_frame_rate()` で個別に変更できます。エンコーダーの作り直しは不要です。
+
+```rust
+// 解像度を変更
+encoder.set_resolution(1280, 720)?;
+
+// ビットレートを変更
+encoder.set_bitrate(1_000_000)?;
+
+// フレームレートを変更
+encoder.set_frame_rate(60, 1)?;
+```
+
+全パラメーターを一括で変更する場合は `set_config()` を使用します。
+
+```rust
+encoder.set_config(EncoderConfig::new(1280, 720, 1_000_000, 60, 1))?;
+```
+
+### デコーダー
+
+利用者側の操作は不要です。ストリーム中に解像度が変わった場合、OpenH264 内部で自動的に対応されます。
+
+`DecodedFrame` はフレームごとに `width()` / `height()` を持っているので、フレームごとにサイズを確認してください。
+
+```rust
+// 解像度が変わっても同じデコーダーで継続可能
+if let Some(frame) = decoder.decode(&data_1080p)? {
+    assert_eq!(frame.width(), 1920);
+}
+
+if let Some(frame) = decoder.decode(&data_720p)? {
+    assert_eq!(frame.width(), 1280);  // 自動的に変更される
+}
+```
+
+### まとめ
+
+| | エンコーダー | デコーダー |
+|---|---|---|
+| 仕組み | `set_resolution()` 等で明示的に変更 | OpenH264 が自動検出 |
+| 利用者の操作 | 変更メソッドを呼ぶ | 不要 |
+| 制約 | なし | なし |
+
 ## テスト
 
 テストの実行には OpenH264 共有ライブラリが必要です。
