@@ -37,6 +37,14 @@ pub enum Error {
     /// openh264 の仮想テーブル (vtbl) のメソッドが None だった場合のエラー
     UnavailableMethod(&'static str),
 
+    /// ビルド時と実行時の OpenH264 バージョンが不一致
+    VersionMismatch {
+        /// ビルド時のバージョン
+        build_version: &'static str,
+        /// 実行時のバージョン
+        runtime_version: String,
+    },
+
     /// デコード結果が I420 以外だった
     UnsupportedFormat { format: sys::EVideoFormatType },
 
@@ -61,6 +69,13 @@ impl std::fmt::Display for Error {
                 write!(f, "{function}() failed: code={code}")
             }
             Error::UnavailableMethod(name) => write!(f, "unavailable method: name={name}"),
+            Error::VersionMismatch {
+                build_version,
+                runtime_version,
+            } => write!(
+                f,
+                "OpenH264 version mismatch: build={build_version}, runtime={runtime_version}"
+            ),
             Error::UnsupportedFormat { format } => {
                 write!(f, "unsupported video format (not I420): format={format}")
             }
@@ -183,7 +198,7 @@ impl Openh264Library {
                 path: path.as_ref().to_path_buf(),
                 version,
             };
-            this.check_version();
+            this.check_version()?;
             Ok(this)
         }
     }
@@ -201,19 +216,15 @@ impl Openh264Library {
         )
     }
 
-    fn check_version(&self) {
+    fn check_version(&self) -> Result<(), Error> {
         let runtime_version = self.runtime_version();
         if runtime_version != BUILD_VERSION {
-            // バージョンが不一致になったからといって、必ずしも利用不可能とは限らないので、
-            // とりあえずは警告ログを出しておくに留めて、処理自体は継続する
-            log::warn!(
-                "OpenH264 version mismatch: build-time version is '{}', \
-                 but runtime version is '{}'. \
-                 This may cause compatibility issues.",
-                BUILD_VERSION,
-                runtime_version
-            );
+            return Err(Error::VersionMismatch {
+                build_version: BUILD_VERSION,
+                runtime_version,
+            });
         }
+        Ok(())
     }
 
     fn call<F, T, U>(&self, symbol: &str, f: F) -> Result<U, Error>

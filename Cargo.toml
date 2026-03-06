@@ -8,9 +8,6 @@ description = "Rust binding for OpenH264"
 repository = "https://github.com/shiguredo/openh264-rs"
 build = "build.rs"
 
-[dependencies]
-log = "0.4"
-
 [build-dependencies]
 bindgen = "0.72"
 shiguredo_toml = "2026.1.0"

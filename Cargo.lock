@@ -616,7 +616,6 @@ name = "shiguredo_openh264"
 version = "2026.1.0-canary.1"
 dependencies = [
  "bindgen",
- "log",
  "mp4",
  "raden",
  "shiguredo_toml",

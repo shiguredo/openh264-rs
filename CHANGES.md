@@ -38,6 +38,10 @@
   - @voluntas
 - [CHANGE] ビルド依存の `toml` クレートを `shiguredo_toml` に置き換える
   - @voluntas
+- [CHANGE] バージョン不一致時の処理を `log::warn!` からエラーに変更する
+  - `Error::VersionMismatch` バリアントを追加する
+  - ランタイム依存の `log` クレートを削除する
+  - @voluntas
 
 ## 2025.1.0
 

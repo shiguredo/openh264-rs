@@ -24,7 +24,7 @@ Cisco の [OpenH264](https://github.com/cisco/openh264) を Rust から利用す
 - 入出力フォーマットは I420 (YUV 4:2:0 planar) 固定 (OpenH264 の仕様)
 - 実行時に OpenH264 共有ライブラリを動的ロード (`dlopen` / `LoadLibraryW`)
   - ビルド時のリンク不要
-- ランタイム依存は `log` クレートのみ
+- ランタイム依存クレートなし
 - macOS / Linux / Windows 対応
 - ビルド時に [bindgen](https://github.com/rust-lang/rust-bindgen) で C ヘッダーからバインディングを自動生成
 
