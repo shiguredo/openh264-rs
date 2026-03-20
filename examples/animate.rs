@@ -1,19 +1,22 @@
-use mp4::{AvcConfig, Bytes, MediaConfig, Mp4Config, Mp4Sample, Mp4Writer, TrackConfig, TrackType};
 use raden::{Circle, Context, Image, PipelineRuntime, PixelFormat, Rgba32};
+use shiguredo_mp4::TrackKind;
+use shiguredo_mp4::Uint;
+use shiguredo_mp4::boxes::{Avc1Box, AvccBox, SampleEntry, VisualSampleEntryFields};
+use shiguredo_mp4::mux::{Mp4FileMuxer, Mp4FileMuxerOptions, Sample, estimate_maximum_moov_box_size};
 use shiguredo_openh264::{
     EncodeOptions, EncodedFrame, Encoder, EncoderConfig, Openh264Library, Profile, RateControlMode,
 };
 use std::env;
 use std::fs::File;
-use std::io::BufWriter;
+use std::io::{Seek, SeekFrom, Write};
+use std::num::NonZeroU32;
 
 const WIDTH: u32 = 640;
 const HEIGHT: u32 = 480;
 const FPS: u32 = 30;
 const DURATION_SECS: u32 = 5;
 const TOTAL_FRAMES: u32 = FPS * DURATION_SECS;
-const TIMESCALE: u32 = 30_000;
-const SAMPLE_DURATION: u32 = TIMESCALE / FPS;
+const TIMESCALE: NonZeroU32 = NonZeroU32::MIN.saturating_add(FPS - 1);
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let openh264_path =
@@ -262,50 +265,78 @@ fn write_mp4(
     sps: &[u8],
     pps: &[u8],
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let file = File::create(path)?;
-    let writer = BufWriter::new(file);
-
-    let mp4_config = Mp4Config {
-        major_brand: "isom".parse()?,
-        minor_version: 512,
-        compatible_brands: vec![
-            "isom".parse()?,
-            "iso2".parse()?,
-            "avc1".parse()?,
-            "mp41".parse()?,
-        ],
-        timescale: 1000,
+    let reserved_moov_size = estimate_maximum_moov_box_size(&[frames.len()]);
+    let options = Mp4FileMuxerOptions {
+        reserved_moov_box_size: reserved_moov_size,
+        ..Default::default()
     };
+    let mut muxer = Mp4FileMuxer::with_options(options)?;
 
-    let mut mp4 = Mp4Writer::write_start(writer, &mp4_config)?;
+    let initial_bytes = muxer.initial_boxes_bytes();
+    let mut file = File::create(path)?;
+    file.write_all(initial_bytes)?;
+    let mut current_offset = initial_bytes.len() as u64;
 
-    let track_config = TrackConfig {
-        track_type: TrackType::Video,
-        timescale: TIMESCALE,
-        language: "und".to_string(),
-        media_conf: MediaConfig::AvcConfig(AvcConfig {
+    // SPS から profile/level 情報を取得
+    // SPS の先頭バイトは NALU ヘッダーなので、profile は [1], compatibility は [2], level は [3]
+    let avc_profile_indication = sps[1];
+    let profile_compatibility = sps[2];
+    let avc_level_indication = sps[3];
+
+    let sample_entry = SampleEntry::Avc1(Avc1Box {
+        visual: VisualSampleEntryFields {
+            data_reference_index: VisualSampleEntryFields::DEFAULT_DATA_REFERENCE_INDEX,
             width: WIDTH as u16,
             height: HEIGHT as u16,
-            seq_param_set: sps.to_vec(),
-            pic_param_set: pps.to_vec(),
-        }),
-    };
-    mp4.add_track(&track_config)?;
+            horizresolution: VisualSampleEntryFields::DEFAULT_HORIZRESOLUTION,
+            vertresolution: VisualSampleEntryFields::DEFAULT_VERTRESOLUTION,
+            frame_count: VisualSampleEntryFields::DEFAULT_FRAME_COUNT,
+            compressorname: VisualSampleEntryFields::NULL_COMPRESSORNAME,
+            depth: VisualSampleEntryFields::DEFAULT_DEPTH,
+        },
+        avcc_box: AvccBox {
+            avc_profile_indication,
+            profile_compatibility,
+            avc_level_indication,
+            length_size_minus_one: Uint::new(3), // 4 バイト長
+            sps_list: vec![sps.to_vec()],
+            pps_list: vec![pps.to_vec()],
+            chroma_format: None,
+            bit_depth_luma_minus8: None,
+            bit_depth_chroma_minus8: None,
+            sps_ext_list: vec![],
+        },
+        unknown_boxes: vec![],
+    });
 
     for (i, frame) in frames.iter().enumerate() {
         let avcc_data = annexb_to_avcc(&frame.data);
         let is_sync = frame.frame_type == shiguredo_openh264::FrameType::Idr;
-        let sample = Mp4Sample {
-            start_time: i as u64 * SAMPLE_DURATION as u64,
-            duration: SAMPLE_DURATION,
-            rendering_offset: 0,
-            is_sync,
-            bytes: Bytes::from(avcc_data),
+
+        file.write_all(&avcc_data)?;
+
+        let sample = Sample {
+            track_kind: TrackKind::Video,
+            sample_entry: if i == 0 { Some(sample_entry.clone()) } else { None },
+            keyframe: is_sync,
+            timescale: TIMESCALE,
+            duration: 1,
+            composition_time_offset: None,
+            data_offset: current_offset,
+            data_size: avcc_data.len(),
         };
-        mp4.write_sample(1, &sample)?;
+        muxer.append_sample(&sample)?;
+
+        current_offset += avcc_data.len() as u64;
     }
 
-    mp4.write_end()?;
+    let finalized = muxer.finalize()?;
+
+    for (offset, bytes) in finalized.offset_and_bytes_pairs() {
+        file.seek(SeekFrom::Start(offset))?;
+        file.write_all(bytes)?;
+    }
+
     Ok(())
 }
 
