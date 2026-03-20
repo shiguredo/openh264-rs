@@ -2,7 +2,9 @@ use raden::{Circle, Context, Image, PipelineRuntime, PixelFormat, Rgba32};
 use shiguredo_mp4::TrackKind;
 use shiguredo_mp4::Uint;
 use shiguredo_mp4::boxes::{Avc1Box, AvccBox, SampleEntry, VisualSampleEntryFields};
-use shiguredo_mp4::mux::{Mp4FileMuxer, Mp4FileMuxerOptions, Sample, estimate_maximum_moov_box_size};
+use shiguredo_mp4::mux::{
+    Mp4FileMuxer, Mp4FileMuxerOptions, Sample, estimate_maximum_moov_box_size,
+};
 use shiguredo_openh264::{
     EncodeOptions, EncodedFrame, Encoder, EncoderConfig, Openh264Library, Profile, RateControlMode,
 };
@@ -317,7 +319,11 @@ fn write_mp4(
 
         let sample = Sample {
             track_kind: TrackKind::Video,
-            sample_entry: if i == 0 { Some(sample_entry.clone()) } else { None },
+            sample_entry: if i == 0 {
+                Some(sample_entry.clone())
+            } else {
+                None
+            },
             keyframe: is_sync,
             timescale: TIMESCALE,
             duration: 1,
