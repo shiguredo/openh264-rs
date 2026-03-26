@@ -46,6 +46,24 @@ let lib = Openh264Library::load("/path/to/libopenh264.so")?;
 println!("OpenH264 version: {}", lib.runtime_version());
 ```
 
+### コーデック対応情報の取得
+
+ライブラリがサポートするコーデックの情報（デコード/エンコード対応、プロファイル）を取得できます。
+
+```rust
+use shiguredo_openh264::{EncodingProfiles, Openh264Library};
+
+let lib = Openh264Library::load("/path/to/libopenh264.so")?;
+let info = lib.supported_codecs();
+
+println!("デコード対応: {}", info.decoding.supported);
+println!("エンコード対応: {}", info.encoding.supported);
+
+if let EncodingProfiles::H264(profiles) = &info.encoding.profiles {
+    println!("対応プロファイル: {:?}", profiles);
+}
+```
+
 ### エンコード
 
 入力は I420 (YUV 4:2:0 planar) 形式で、Y, U, V プレーンを個別に渡します。
