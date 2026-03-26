@@ -4,6 +4,7 @@ on:
   push:
     paths:
       - "src/**"
+      - "tests/**"
       - "pbt/**"
       - "build.rs"
       - "Cargo.toml"
