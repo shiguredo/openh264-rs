@@ -9,3 +9,6 @@ target/
 
 # macOS
 .DS_Store
+
+# openh264
+libopenh264-*
