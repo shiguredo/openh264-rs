@@ -30,6 +30,9 @@
   - @voluntas
 - [ADD] `ComplexityMode` / `RateControlMode` / `SliceMode` enum を追加する
   - @voluntas
+- [ADD] `Openh264Library::supported_codecs()` を追加する
+  - コーデックのデコード/エンコード対応状況と対応プロファイルを返す
+  - @voluntas
 - [ADD] エンコーダーの動的パラメーター変更メソッドを追加する
   - `set_bitrate()` でビットレートを動的に変更する
   - `set_frame_rate()` でフレームレートを動的に変更する

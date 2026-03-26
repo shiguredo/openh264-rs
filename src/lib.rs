@@ -86,6 +86,72 @@ impl std::fmt::Display for Error {
 
 impl std::error::Error for Error {}
 
+// ============================================================================
+// コーデック対応情報
+// ============================================================================
+
+/// コーデック種別
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VideoCodecType {
+    /// H.264
+    H264,
+}
+
+/// H.264 エンコーディングプロファイル
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum H264EncodingProfile {
+    /// Constrained Baseline プロファイル
+    ConstrainedBaseline,
+    /// Baseline プロファイル
+    Baseline,
+    /// Main プロファイル
+    Main,
+    /// High プロファイル
+    High,
+}
+
+/// コーデック固有のエンコードプロファイル情報
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EncodingProfiles {
+    /// H.264 プロファイル一覧
+    H264(Vec<H264EncodingProfile>),
+    /// プロファイル情報なし
+    Unsupported,
+}
+
+/// デコード対応情報
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DecodingInfo {
+    /// デコードに対応しているか
+    pub supported: bool,
+    /// ハードウェアアクセラレーションに対応しているか
+    pub hardware_accelerated: bool,
+}
+
+/// エンコード対応情報
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EncodingInfo {
+    /// エンコードに対応しているか
+    pub supported: bool,
+    /// ハードウェアアクセラレーションに対応しているか
+    pub hardware_accelerated: bool,
+    /// コーデック固有のプロファイル情報
+    pub profiles: EncodingProfiles,
+}
+
+/// コーデック対応情報
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CodecInfo {
+    /// コーデック種別
+    pub codec: VideoCodecType,
+    /// デコード情報
+    pub decoding: DecodingInfo,
+    /// エンコード情報
+    pub encoding: EncodingInfo,
+}
+
+// ============================================================================
+
 /// H.264 プロファイル
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Profile {
@@ -225,6 +291,159 @@ impl Openh264Library {
             });
         }
         Ok(())
+    }
+
+    /// 利用可能な H.264 コーデックの対応情報を返す
+    ///
+    /// OpenH264 はソフトウェアコーデックであるため、`hardware_accelerated` は常に `false` を返す。
+    /// プロファイルの検出は各プロファイルでエンコーダーの初期化を試行して判定する。
+    pub fn supported_codecs(&self) -> CodecInfo {
+        let decoding = DecodingInfo {
+            supported: self.is_decoder_available(),
+            hardware_accelerated: false,
+        };
+
+        let encoder_available = self.is_encoder_available();
+
+        let profiles = if encoder_available {
+            EncodingProfiles::H264(self.detect_supported_profiles())
+        } else {
+            EncodingProfiles::Unsupported
+        };
+
+        let encoding = EncodingInfo {
+            supported: encoder_available,
+            hardware_accelerated: false,
+            profiles,
+        };
+
+        CodecInfo {
+            codec: VideoCodecType::H264,
+            decoding,
+            encoding,
+        }
+    }
+
+    /// デコーダーを生成・初期化できるか試行する
+    fn is_decoder_available(&self) -> bool {
+        let mut inner = std::ptr::null_mut();
+        unsafe {
+            let Ok(code) = self.call("WelsCreateDecoder", |f: WelsCreateDecoder| f(&mut inner))
+            else {
+                return false;
+            };
+            if code != 0 || inner.is_null() {
+                return false;
+            }
+
+            let param = MaybeUninit::<sys::SDecodingParam>::zeroed();
+            let mut param = param.assume_init();
+            param.pFileNameRestructed = std::ptr::null_mut();
+            param.uiTargetDqLayer = 1;
+            param.eEcActiveIdc = sys::ERROR_CON_IDC_ERROR_CON_DISABLE;
+            param.bParseOnly = false;
+            param.sVideoProperty.eVideoBsType = sys::VIDEO_BITSTREAM_TYPE_VIDEO_BITSTREAM_AVC;
+
+            let supported = match (**inner).Initialize {
+                Some(init) => init(inner, &param) == 0,
+                None => false,
+            };
+
+            if let Some(uninit) = (**inner).Uninitialize {
+                uninit(inner);
+            }
+            let _ = self.call("WelsDestroyDecoder", |f: WelsDestroyDecoder| f(inner));
+
+            supported
+        }
+    }
+
+    /// エンコーダーを生成できるか試行する
+    fn is_encoder_available(&self) -> bool {
+        let mut inner = std::ptr::null_mut();
+        unsafe {
+            let Ok(code) = self.call("WelsCreateSVCEncoder", |f: WelsCreateSVCEncoder| {
+                f(&mut inner)
+            }) else {
+                return false;
+            };
+            if code != 0 || inner.is_null() {
+                return false;
+            }
+            let _ = self.call("WelsDestroySVCEncoder", |f: WelsDestroySVCEncoder| f(inner));
+            true
+        }
+    }
+
+    /// 各プロファイルでエンコーダーの初期化を試行して対応プロファイルを検出する
+    fn detect_supported_profiles(&self) -> Vec<H264EncodingProfile> {
+        let candidates = [
+            (
+                sys::EProfileIdc_PRO_BASELINE,
+                H264EncodingProfile::ConstrainedBaseline,
+            ),
+            (sys::EProfileIdc_PRO_BASELINE, H264EncodingProfile::Baseline),
+            (sys::EProfileIdc_PRO_MAIN, H264EncodingProfile::Main),
+            (sys::EProfileIdc_PRO_HIGH, H264EncodingProfile::High),
+        ];
+
+        let mut profiles = Vec::new();
+        for (profile_idc, profile) in candidates {
+            if self.is_profile_supported(profile_idc) {
+                profiles.push(profile);
+            }
+        }
+        profiles
+    }
+
+    /// 指定したプロファイルでエンコーダーを初期化できるか試行する
+    fn is_profile_supported(&self, profile_idc: sys::EProfileIdc) -> bool {
+        let mut inner = std::ptr::null_mut();
+        unsafe {
+            let Ok(code) = self.call("WelsCreateSVCEncoder", |f: WelsCreateSVCEncoder| {
+                f(&mut inner)
+            }) else {
+                return false;
+            };
+            if code != 0 || inner.is_null() {
+                return false;
+            }
+
+            let result = (|| {
+                let mut param = MaybeUninit::<sys::SEncParamExt>::zeroed();
+                let get_default = (**inner).GetDefaultParams?;
+                if get_default(inner, param.as_mut_ptr()) != 0 {
+                    return None;
+                }
+
+                let mut param = param.assume_init();
+                param.iPicWidth = 1920;
+                param.iPicHeight = 1080;
+                param.iTargetBitrate = 1_000_000;
+                param.fMaxFrameRate = 30.0;
+                param.iUsageType = sys::EUsageType_CAMERA_VIDEO_REAL_TIME;
+
+                // 空間レイヤーにプロファイルを設定する
+                for layer in &mut param.sSpatialLayers[..param.iSpatialLayerNum as usize] {
+                    layer.uiProfileIdc = profile_idc;
+                    layer.iVideoWidth = 1920;
+                    layer.iVideoHeight = 1080;
+                    layer.fFrameRate = 30.0;
+                    layer.iSpatialBitrate = 1_000_000;
+                    layer.iMaxSpatialBitrate = 2_000_000;
+                }
+
+                let init = (**inner).InitializeExt?;
+                Some(init(inner, &param) == 0)
+            })();
+
+            if let Some(uninit) = (**inner).Uninitialize {
+                uninit(inner);
+            }
+            let _ = self.call("WelsDestroySVCEncoder", |f: WelsDestroySVCEncoder| f(inner));
+
+            result.unwrap_or(false)
+        }
     }
 
     fn call<F, T, U>(&self, symbol: &str, f: F) -> Result<U, Error>
@@ -1195,6 +1414,38 @@ mod tests {
         decoded_count += decoder.decode(&data).expect("decode error").is_some() as usize;
         decoded_count += decoder.finish().expect("decode error").is_some() as usize;
         assert_eq!(decoded_count, 1);
+    }
+
+    #[test]
+    fn supported_codecs() {
+        let Ok(path) = std::env::var("OPENH264_PATH") else {
+            panic!("OPENH264_PATH env var is not found");
+        };
+
+        let lib = Openh264Library::load(path).expect("load library error");
+        let info = lib.supported_codecs();
+
+        assert_eq!(info.codec, VideoCodecType::H264);
+
+        // デコード対応
+        assert!(info.decoding.supported);
+        assert!(!info.decoding.hardware_accelerated);
+
+        // エンコード対応
+        assert!(info.encoding.supported);
+        assert!(!info.encoding.hardware_accelerated);
+
+        // プロファイル検出
+        match &info.encoding.profiles {
+            EncodingProfiles::H264(profiles) => {
+                assert!(!profiles.is_empty());
+                // OpenH264 は少なくとも Constrained Baseline に対応している
+                assert!(profiles.contains(&H264EncodingProfile::ConstrainedBaseline));
+            }
+            EncodingProfiles::Unsupported => {
+                panic!("encoding profiles should not be Unsupported");
+            }
+        }
     }
 
     #[test]
