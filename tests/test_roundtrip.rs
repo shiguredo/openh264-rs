@@ -316,3 +316,96 @@ fn roundtrip_force_idr() {
     }
     assert_eq!(decoded_count, num_frames);
 }
+
+/// fps_numerator / fps_denominator がゼロの場合にエラーを返す
+#[test]
+fn encoder_rejects_zero_fps() {
+    let lib = load_library();
+
+    // Encoder::new で fps_numerator = 0
+    let config = EncoderConfig::new(64, 64, 100_000, 0, 1);
+    assert!(Encoder::new(lib.clone(), config).is_err());
+
+    // Encoder::new で fps_denominator = 0
+    let config = EncoderConfig::new(64, 64, 100_000, 30, 0);
+    assert!(Encoder::new(lib.clone(), config).is_err());
+
+    // set_frame_rate でゼロ
+    let config = EncoderConfig::new(64, 64, 100_000, 30, 1);
+    let mut encoder = Encoder::new(lib.clone(), config).expect("failed to create encoder");
+    assert!(encoder.set_frame_rate(0, 1).is_err());
+    assert!(encoder.set_frame_rate(30, 0).is_err());
+
+    // set_config でゼロ
+    let config_zero = EncoderConfig::new(64, 64, 100_000, 0, 1);
+    assert!(encoder.set_config(config_zero).is_err());
+}
+
+/// 動的パラメーター変更後にエンコード・デコードが正常に動作する
+#[test]
+fn dynamic_parameter_change() {
+    let lib = load_library();
+    let config = EncoderConfig::new(320, 240, 500_000, 30, 1);
+    let mut encoder = Encoder::new(lib.clone(), config).expect("failed to create encoder");
+
+    // 初期解像度でエンコード
+    let (y, u, v) = generate_dummy_i420(320, 240, 0);
+    let encoded = encoder
+        .encode(&y, &u, &v, &EncodeOptions::default())
+        .expect("failed to encode");
+    assert!(encoded.is_some());
+
+    // ビットレート変更
+    encoder
+        .set_bitrate(1_000_000)
+        .expect("failed to set bitrate");
+
+    // フレームレート変更
+    encoder
+        .set_frame_rate(60, 1)
+        .expect("failed to set frame rate");
+
+    // 解像度変更
+    encoder
+        .set_resolution(160, 120)
+        .expect("failed to set resolution");
+
+    // 変更後の解像度でエンコード→デコードが成功する
+    let (y, u, v) = generate_dummy_i420(160, 120, 1);
+    let encoded = encoder
+        .encode(&y, &u, &v, &EncodeOptions::default())
+        .expect("failed to encode after resolution change");
+    assert!(encoded.is_some());
+
+    let encoded = encoded.unwrap();
+
+    // 解像度変更後は新しい SPS が必要なので IDR になる
+    assert_eq!(encoded.frame_type, FrameType::Idr);
+    let mut bitstream = Vec::new();
+    for sps in &encoded.sps_list {
+        bitstream.extend_from_slice(&[0, 0, 0, 1]);
+        bitstream.extend_from_slice(sps);
+    }
+    for pps in &encoded.pps_list {
+        bitstream.extend_from_slice(&[0, 0, 0, 1]);
+        bitstream.extend_from_slice(pps);
+    }
+    bitstream.extend_from_slice(&encoded.data);
+
+    let mut decoder = Decoder::new(lib).expect("failed to create decoder");
+    let nalus = split_annex_b(&bitstream);
+    let mut decoded = false;
+    for nalu in &nalus {
+        if let Some(frame) = decoder.decode(nalu).expect("failed to decode") {
+            assert_eq!(frame.width(), 160);
+            assert_eq!(frame.height(), 120);
+            decoded = true;
+        }
+    }
+    if let Some(frame) = decoder.finish().expect("failed to finish") {
+        assert_eq!(frame.width(), 160);
+        assert_eq!(frame.height(), 120);
+        decoded = true;
+    }
+    assert!(decoded, "no frame was decoded after resolution change");
+}

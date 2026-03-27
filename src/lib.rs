@@ -1430,12 +1430,11 @@ mod tests {
         assert!(info.encoding.supported);
         assert!(!info.encoding.hardware_accelerated);
 
-        // プロファイル検出
+        // OpenH264 は Constrained Baseline Profile のみ対応
         match &info.encoding.profiles {
             EncodingProfiles::H264(profiles) => {
-                assert!(!profiles.is_empty());
-                // OpenH264 は少なくとも Constrained Baseline に対応している
-                assert!(profiles.contains(&H264EncodingProfile::ConstrainedBaseline));
+                assert_eq!(profiles.len(), 1);
+                assert_eq!(profiles[0], H264EncodingProfile::ConstrainedBaseline);
             }
             EncodingProfiles::Unsupported => {
                 panic!("encoding profiles should not be Unsupported");
