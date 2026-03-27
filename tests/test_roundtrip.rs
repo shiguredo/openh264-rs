@@ -409,3 +409,83 @@ fn dynamic_parameter_change() {
     }
     assert!(decoded, "no frame was decoded after resolution change");
 }
+
+/// width / height がゼロの場合にエラーを返す
+#[test]
+fn encoder_rejects_zero_dimensions() {
+    let lib = load_library();
+
+    // Encoder::new で width = 0
+    let config = EncoderConfig::new(0, 64, 100_000, 30, 1);
+    assert!(Encoder::new(lib.clone(), config).is_err());
+
+    // Encoder::new で height = 0
+    let config = EncoderConfig::new(64, 0, 100_000, 30, 1);
+    assert!(Encoder::new(lib.clone(), config).is_err());
+
+    // set_resolution でゼロ
+    let config = EncoderConfig::new(64, 64, 100_000, 30, 1);
+    let mut encoder = Encoder::new(lib.clone(), config).expect("failed to create encoder");
+    assert!(encoder.set_resolution(0, 64).is_err());
+    assert!(encoder.set_resolution(64, 0).is_err());
+
+    // set_config でゼロ
+    let config_zero = EncoderConfig::new(0, 64, 100_000, 30, 1);
+    assert!(encoder.set_config(config_zero).is_err());
+}
+
+/// QP 値の範囲外や min_qp > max_qp の場合にエラーを返す
+#[test]
+fn encoder_rejects_invalid_qp() {
+    let lib = load_library();
+
+    // max_qp が 51 を超える
+    let config = EncoderConfig {
+        max_qp: Some(52),
+        ..EncoderConfig::new(64, 64, 100_000, 30, 1)
+    };
+    assert!(Encoder::new(lib.clone(), config).is_err());
+
+    // min_qp が 51 を超える
+    let config = EncoderConfig {
+        min_qp: Some(52),
+        ..EncoderConfig::new(64, 64, 100_000, 30, 1)
+    };
+    assert!(Encoder::new(lib.clone(), config).is_err());
+
+    // min_qp > max_qp
+    let config = EncoderConfig {
+        min_qp: Some(30),
+        max_qp: Some(20),
+        ..EncoderConfig::new(64, 64, 100_000, 30, 1)
+    };
+    assert!(Encoder::new(lib.clone(), config).is_err());
+
+    // 正常な QP 範囲は通る
+    let config = EncoderConfig {
+        min_qp: Some(10),
+        max_qp: Some(40),
+        ..EncoderConfig::new(64, 64, 100_000, 30, 1)
+    };
+    assert!(Encoder::new(lib.clone(), config).is_ok());
+}
+
+/// SliceMode のゼロ値の場合にエラーを返す
+#[test]
+fn encoder_rejects_zero_slice_mode() {
+    let lib = load_library();
+
+    // FixedCount(0)
+    let config = EncoderConfig {
+        slice_mode: Some(shiguredo_openh264::SliceMode::FixedCount(0)),
+        ..EncoderConfig::new(64, 64, 100_000, 30, 1)
+    };
+    assert!(Encoder::new(lib.clone(), config).is_err());
+
+    // SizeConstrained(0)
+    let config = EncoderConfig {
+        slice_mode: Some(shiguredo_openh264::SliceMode::SizeConstrained(0)),
+        ..EncoderConfig::new(64, 64, 100_000, 30, 1)
+    };
+    assert!(Encoder::new(lib.clone(), config).is_err());
+}

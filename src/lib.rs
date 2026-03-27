@@ -849,6 +849,65 @@ pub struct Encoder {
     fps_denominator: usize,
 }
 
+/// `EncoderConfig` のバリデーション
+///
+/// `Encoder::new()` と `set_config()` の共通処理。
+fn validate_config(config: &EncoderConfig) -> Result<(), Error> {
+    if config.width == 0 || config.height == 0 {
+        return Err(Error::InvalidParameter(
+            "width and height must be non-zero".to_string(),
+        ));
+    }
+
+    if config.fps_numerator == 0 || config.fps_denominator == 0 {
+        return Err(Error::InvalidParameter(
+            "fps_numerator and fps_denominator must be non-zero".to_string(),
+        ));
+    }
+
+    if let Some(max_qp) = config.max_qp
+        && max_qp > 51
+    {
+        return Err(Error::InvalidParameter(
+            "max_qp must be in range 0..=51".to_string(),
+        ));
+    }
+
+    if let Some(min_qp) = config.min_qp
+        && min_qp > 51
+    {
+        return Err(Error::InvalidParameter(
+            "min_qp must be in range 0..=51".to_string(),
+        ));
+    }
+
+    if let (Some(min_qp), Some(max_qp)) = (config.min_qp, config.max_qp)
+        && min_qp > max_qp
+    {
+        return Err(Error::InvalidParameter(
+            "min_qp must be <= max_qp".to_string(),
+        ));
+    }
+
+    if let Some(slice_mode) = config.slice_mode {
+        match slice_mode {
+            SliceMode::FixedCount(0) => {
+                return Err(Error::InvalidParameter(
+                    "FixedCount slice count must be non-zero".to_string(),
+                ));
+            }
+            SliceMode::SizeConstrained(0) => {
+                return Err(Error::InvalidParameter(
+                    "SizeConstrained size must be non-zero".to_string(),
+                ));
+            }
+            _ => {}
+        }
+    }
+
+    Ok(())
+}
+
 /// `EncoderConfig` の内容を `SEncParamExt` に反映する
 ///
 /// `new()` と `reconfigure()` の共通処理。
@@ -978,11 +1037,7 @@ fn apply_config_to_param(param: &mut sys::SEncParamExt, config: &EncoderConfig) 
 impl Encoder {
     /// エンコーダーインスタンスを生成する
     pub fn new(lib: Openh264Library, config: EncoderConfig) -> Result<Self, Error> {
-        if config.fps_numerator == 0 || config.fps_denominator == 0 {
-            return Err(Error::InvalidParameter(
-                "fps_numerator and fps_denominator must be non-zero".to_string(),
-            ));
-        }
+        validate_config(&config)?;
 
         let mut inner = std::ptr::null_mut();
         let mut param = MaybeUninit::<sys::SEncParamExt>::zeroed();
@@ -1100,6 +1155,12 @@ impl Encoder {
     /// OpenH264 の `SetOption(ENCODER_OPTION_SVC_ENCODE_PARAM_EXT)` で
     /// 現在のパラメーターを維持したまま解像度のみ変更する。
     pub fn set_resolution(&mut self, width: usize, height: usize) -> Result<(), Error> {
+        if width == 0 || height == 0 {
+            return Err(Error::InvalidParameter(
+                "width and height must be non-zero".to_string(),
+            ));
+        }
+
         unsafe {
             let mut param = MaybeUninit::<sys::SEncParamExt>::zeroed();
             let name = "ISVCEncoder.GetOption";
@@ -1146,12 +1207,12 @@ impl Encoder {
     /// 解像度、ビットレート、フレームレート等を含む全パラメーターを再設定する。
     /// OpenH264 の `SetOption(ENCODER_OPTION_SVC_ENCODE_PARAM_EXT)` を使用するため、
     /// エンコーダーの再生成よりも軽量。
+    ///
+    /// `None` のフィールドは現在のエンコーダー設定値を維持する。
+    /// `Encoder::new()` では `GetDefaultParams` のデフォルト値が使われるのに対し、
+    /// `set_config()` では直前の設定値が引き継がれる点に注意。
     pub fn set_config(&mut self, config: EncoderConfig) -> Result<(), Error> {
-        if config.fps_numerator == 0 || config.fps_denominator == 0 {
-            return Err(Error::InvalidParameter(
-                "fps_numerator and fps_denominator must be non-zero".to_string(),
-            ));
-        }
+        validate_config(&config)?;
 
         unsafe {
             let mut param = MaybeUninit::<sys::SEncParamExt>::zeroed();
@@ -1350,10 +1411,10 @@ pub struct EncodedFrame {
     /// フレームタイプ
     pub frame_type: FrameType,
 
-    /// SPS (IDR フレーム時のみ含まれる)
+    /// SPS (SPS NALU が存在するフレームで格納される、通常は IDR フレーム)
     pub sps_list: Vec<Vec<u8>>,
 
-    /// PPS (IDR フレーム時のみ含まれる)
+    /// PPS (PPS NALU が存在するフレームで格納される、通常は IDR フレーム)
     pub pps_list: Vec<Vec<u8>>,
 
     /// 圧縮データ (Annex B 形式、SPS/PPS の NALU を除外)
