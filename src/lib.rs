@@ -1425,32 +1425,82 @@ pub struct EncodedFrame {
 mod tests {
     use super::*;
 
+    fn load_lib() -> Openh264Library {
+        let path = std::env::var("OPENH264_PATH").expect("OPENH264_PATH env var is not found");
+        Openh264Library::load(path).expect("failed to load OpenH264 library")
+    }
+
+    // ====================================================================
+    // ライブラリ
+    // ====================================================================
+
     #[test]
     fn load_library() {
-        let Ok(path) = std::env::var("OPENH264_PATH") else {
-            panic!("OPENH264_PATH env var is not found");
-        };
-
-        assert!(Openh264Library::load(path).is_ok());
+        let _ = load_lib();
     }
 
     #[test]
-    fn init_decoder() {
-        let Ok(path) = std::env::var("OPENH264_PATH") else {
-            panic!("OPENH264_PATH env var is not found");
-        };
+    fn library_path_and_version() {
+        let lib = load_lib();
 
-        let lib = Openh264Library::load(path).expect("load library error");
+        // path() がファイルパスを返す
+        assert!(!lib.path().as_os_str().is_empty());
+
+        // runtime_version() が "v数字.数字.数字" の形式
+        let ver = lib.runtime_version();
+        assert!(ver.starts_with('v'));
+        assert_eq!(ver.split('.').count(), 3);
+
+        // ビルド時バージョンと一致する (check_version で検証済みだが明示的に確認)
+        assert_eq!(ver, BUILD_VERSION);
+    }
+
+    // ====================================================================
+    // デコーダー
+    // ====================================================================
+
+    #[test]
+    fn init_decoder() {
+        let lib = load_lib();
         assert!(Decoder::new(lib).is_ok());
+    }
+
+    /// SPS のみを渡した場合、デコード結果は None を返す
+    #[test]
+    fn decode_sps_only_returns_none() {
+        let lib = load_lib();
+        let mut decoder = Decoder::new(lib).expect("create decoder error");
+
+        // SPS NAL ユニットのみ
+        let sps = [
+            0, 0, 0, 1, 103, 100, 0, 30, 172, 217, 64, 160, 61, 176, 17, 0, 0, 3, 0, 1, 0, 0, 3, 0,
+            50, 15, 22, 45, 150,
+        ];
+        let result = decoder.decode(&sps).expect("decode error");
+        assert!(result.is_none());
+    }
+
+    /// 空データのデコードは None を返す
+    #[test]
+    fn decode_empty_data_returns_none() {
+        let lib = load_lib();
+        let mut decoder = Decoder::new(lib).expect("create decoder error");
+        let result = decoder.decode(&[]).expect("decode error");
+        assert!(result.is_none());
+    }
+
+    /// finish() をデータなしで呼んでも None を返す
+    #[test]
+    fn finish_without_data_returns_none() {
+        let lib = load_lib();
+        let mut decoder = Decoder::new(lib).expect("create decoder error");
+        let result = decoder.finish().expect("finish error");
+        assert!(result.is_none());
     }
 
     #[test]
     fn decode_black() {
-        let Ok(path) = std::env::var("OPENH264_PATH") else {
-            panic!("OPENH264_PATH env var is not found");
-        };
-
-        let lib = Openh264Library::load(path).expect("load library error");
+        let lib = load_lib();
         let mut decoder = Decoder::new(lib).expect("create decoder error");
         let mut decoded_count = 0;
 
@@ -1472,26 +1522,75 @@ mod tests {
         assert_eq!(decoded_count, 1);
     }
 
+    /// DecodedFrame の全アクセサを検証する
+    #[test]
+    fn decoded_frame_accessors() {
+        let lib = load_lib();
+
+        // エンコードしてデコードする
+        let width = 64;
+        let height = 64;
+        let config = EncoderConfig::new(width, height, 500_000, 30, 1);
+        let mut encoder = Encoder::new(lib.clone(), config).expect("create encoder error");
+        let encoded = encoder
+            .encode(
+                &vec![128u8; width * height],
+                &vec![128u8; width / 2 * height / 2],
+                &vec![128u8; width / 2 * height / 2],
+                &EncodeOptions::default(),
+            )
+            .expect("encode error")
+            .expect("expected encoded frame");
+
+        // Annex B ストリームを構築してデコード
+        let mut bitstream = Vec::new();
+        for sps in &encoded.sps_list {
+            bitstream.extend_from_slice(&[0, 0, 0, 1]);
+            bitstream.extend_from_slice(sps);
+        }
+        for pps in &encoded.pps_list {
+            bitstream.extend_from_slice(&[0, 0, 0, 1]);
+            bitstream.extend_from_slice(pps);
+        }
+        bitstream.extend_from_slice(&encoded.data);
+
+        let mut decoder = Decoder::new(lib).expect("create decoder error");
+        let frame = decoder
+            .decode(&bitstream)
+            .expect("decode error")
+            .expect("expected decoded frame");
+
+        assert_eq!(frame.width(), width);
+        assert_eq!(frame.height(), height);
+
+        // ストライドは幅以上
+        assert!(frame.y_stride() >= width);
+        assert!(frame.u_stride() >= width / 2);
+        assert!(frame.v_stride() >= width / 2);
+
+        // プレーンのデータサイズがストライド * 高さと一致する
+        assert_eq!(frame.y_plane().len(), frame.y_stride() * height);
+        assert_eq!(frame.u_plane().len(), frame.u_stride() * height.div_ceil(2));
+        assert_eq!(frame.v_plane().len(), frame.v_stride() * height.div_ceil(2));
+    }
+
+    // ====================================================================
+    // エンコーダー
+    // ====================================================================
+
     #[test]
     fn supported_codecs() {
-        let Ok(path) = std::env::var("OPENH264_PATH") else {
-            panic!("OPENH264_PATH env var is not found");
-        };
-
-        let lib = Openh264Library::load(path).expect("load library error");
+        let lib = load_lib();
         let info = lib.supported_codecs();
 
         assert_eq!(info.codec, VideoCodecType::H264);
 
-        // デコード対応
         assert!(info.decoding.supported);
         assert!(!info.decoding.hardware_accelerated);
 
-        // エンコード対応
         assert!(info.encoding.supported);
         assert!(!info.encoding.hardware_accelerated);
 
-        // OpenH264 は Constrained Baseline Profile のみ対応
         match &info.encoding.profiles {
             EncodingProfiles::H264(profiles) => {
                 assert_eq!(profiles.len(), 1);
@@ -1505,22 +1604,14 @@ mod tests {
 
     #[test]
     fn init_encoder() {
-        let Ok(path) = std::env::var("OPENH264_PATH") else {
-            panic!("OPENH264_PATH env var is not found");
-        };
-
-        let lib = Openh264Library::load(path).expect("load library error");
+        let lib = load_lib();
         let config = EncoderConfig::new(64, 64, 100_000, 1, 1);
         assert!(Encoder::new(lib, config).is_ok());
     }
 
     #[test]
     fn encode_black() {
-        let Ok(path) = std::env::var("OPENH264_PATH") else {
-            panic!("OPENH264_PATH env var is not found");
-        };
-
-        let lib = Openh264Library::load(path).expect("load library error");
+        let lib = load_lib();
         let config = EncoderConfig::new(64, 64, 100_000, 1, 1);
         let mut encoder = Encoder::new(lib, config).expect("create encoder error");
         let encoded = encoder
@@ -1537,5 +1628,184 @@ mod tests {
         assert!(!encoded.sps_list.is_empty());
         assert!(!encoded.pps_list.is_empty());
         assert!(!encoded.data.is_empty());
+    }
+
+    /// 不正な YUV サイズでエンコードするとエラーを返す
+    #[test]
+    fn encode_rejects_invalid_yuv_size() {
+        let lib = load_lib();
+        let config = EncoderConfig::new(64, 64, 100_000, 30, 1);
+        let mut encoder = Encoder::new(lib, config).expect("create encoder error");
+
+        // Y プレーンが小さすぎる
+        let result = encoder.encode(
+            &[0; 100],
+            &[0; 32 * 32],
+            &[0; 32 * 32],
+            &EncodeOptions::default(),
+        );
+        assert!(result.is_err());
+
+        // U プレーンが小さすぎる
+        let result = encoder.encode(
+            &[0; 64 * 64],
+            &[0; 100],
+            &[0; 32 * 32],
+            &EncodeOptions::default(),
+        );
+        assert!(result.is_err());
+
+        // V プレーンが小さすぎる
+        let result = encoder.encode(
+            &[0; 64 * 64],
+            &[0; 32 * 32],
+            &[0; 100],
+            &EncodeOptions::default(),
+        );
+        assert!(result.is_err());
+    }
+
+    /// 連続エンコードで P フレームが生成される
+    #[test]
+    fn encode_produces_p_frames() {
+        let lib = load_lib();
+        let config = EncoderConfig {
+            intra_period: Some(300),
+            ..EncoderConfig::new(64, 64, 500_000, 30, 1)
+        };
+        let mut encoder = Encoder::new(lib, config).expect("create encoder error");
+        let opts = EncodeOptions::default();
+
+        // 最初のフレームは IDR
+        let first = encoder
+            .encode(&[0; 64 * 64], &[0; 32 * 32], &[0; 32 * 32], &opts)
+            .expect("encode error")
+            .expect("expected encoded frame");
+        assert_eq!(first.frame_type, FrameType::Idr);
+
+        // 2 フレーム目以降に P フレームが含まれる
+        let mut has_p = false;
+        for _ in 0..5 {
+            if let Some(frame) = encoder
+                .encode(&[0; 64 * 64], &[0; 32 * 32], &[0; 32 * 32], &opts)
+                .expect("encode error")
+                && frame.frame_type == FrameType::P
+            {
+                has_p = true;
+                // P フレームには SPS/PPS が含まれない
+                assert!(frame.sps_list.is_empty());
+                assert!(frame.pps_list.is_empty());
+                break;
+            }
+        }
+        assert!(has_p, "P frame was not produced");
+    }
+
+    /// 全 Option フィールドを指定してエンコーダーを初期化する
+    #[test]
+    fn encoder_with_all_options() {
+        let lib = load_lib();
+        let config = EncoderConfig {
+            level: Some(Level::L3_1),
+            entropy_coding_mode: Some(EntropyCodingMode::Cabac),
+            complexity_mode: Some(ComplexityMode::Medium),
+            ref_frame_count: Some(NonZeroUsize::new(1).unwrap()),
+            thread_count: Some(NonZeroUsize::new(1).unwrap()),
+            spatial_layers: Some(NonZeroUsize::new(1).unwrap()),
+            temporal_layers: Some(NonZeroUsize::new(1).unwrap()),
+            intra_period: Some(30),
+            rate_control_mode: Some(RateControlMode::Quality),
+            max_qp: Some(40),
+            min_qp: Some(10),
+            denoise: Some(false),
+            background_detection: Some(true),
+            adaptive_quantization: Some(true),
+            scene_change_detection: Some(true),
+            deblocking_filter: Some(true),
+            long_term_reference: Some(false),
+            slice_mode: Some(SliceMode::Single),
+            ..EncoderConfig::new(320, 240, 1_000_000, 30, 1)
+        };
+
+        let mut encoder = Encoder::new(lib, config).expect("create encoder error");
+
+        // エンコードが正常に動作する
+        let w = 320;
+        let h = 240;
+        let encoded = encoder
+            .encode(
+                &vec![128u8; w * h],
+                &vec![128u8; w / 2 * h / 2],
+                &vec![128u8; w / 2 * h / 2],
+                &EncodeOptions::default(),
+            )
+            .expect("encode error");
+        assert!(encoded.is_some());
+    }
+
+    /// set_config で全パラメーターを動的に変更してエンコードが成功する
+    #[test]
+    fn set_config_then_encode() {
+        let lib = load_lib();
+        let config = EncoderConfig::new(64, 64, 100_000, 30, 1);
+        let mut encoder = Encoder::new(lib, config).expect("create encoder error");
+
+        // 初期設定でエンコード
+        let encoded = encoder
+            .encode(
+                &[0; 64 * 64],
+                &[0; 32 * 32],
+                &[0; 32 * 32],
+                &EncodeOptions::default(),
+            )
+            .expect("encode error");
+        assert!(encoded.is_some());
+
+        // set_config でパラメーター変更
+        let new_config = EncoderConfig {
+            rate_control_mode: Some(RateControlMode::Bitrate),
+            intra_period: Some(15),
+            max_qp: Some(45),
+            min_qp: Some(5),
+            denoise: Some(true),
+            background_detection: Some(false),
+            adaptive_quantization: Some(false),
+            scene_change_detection: Some(false),
+            deblocking_filter: Some(false),
+            long_term_reference: Some(true),
+            slice_mode: Some(SliceMode::FixedCount(2)),
+            ..EncoderConfig::new(64, 64, 200_000, 15, 1)
+        };
+        encoder.set_config(new_config).expect("set_config error");
+
+        // 変更後もエンコードが成功する
+        let encoded = encoder
+            .encode(
+                &[0; 64 * 64],
+                &[0; 32 * 32],
+                &[0; 32 * 32],
+                &EncodeOptions::default(),
+            )
+            .expect("encode error after set_config");
+        assert!(encoded.is_some());
+    }
+
+    // ====================================================================
+    // skip_start_code
+    // ====================================================================
+
+    #[test]
+    fn skip_start_code_variants() {
+        // 4 バイトスタートコード
+        assert_eq!(skip_start_code(&[0, 0, 0, 1, 0x65]), &[0x65]);
+
+        // 3 バイトスタートコード
+        assert_eq!(skip_start_code(&[0, 0, 1, 0x65]), &[0x65]);
+
+        // スタートコードなし
+        assert_eq!(skip_start_code(&[0x65, 0x88]), &[0x65, 0x88]);
+
+        // 空データ
+        assert_eq!(skip_start_code(&[]), &[] as &[u8]);
     }
 }
