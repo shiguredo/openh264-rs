@@ -1,5 +1,6 @@
 //! [OpenH264] の Rust バインディング
 //!
+//! 対応プロファイルは Constrained Baseline Profile up to Level 5.2。
 //! 入出力フォーマットは I420 (YUV 4:2:0 planar) 固定。
 //! これは OpenH264 エンコーダー・デコーダー双方の仕様による制約。
 //!
@@ -50,6 +51,9 @@ pub enum Error {
 
     /// エンコード時の入力 YUV のサイズが不正だった
     InvalidYuvSize,
+
+    /// パラメーターが不正
+    InvalidParameter(String),
 }
 
 impl Error {
@@ -80,6 +84,7 @@ impl std::fmt::Display for Error {
                 write!(f, "unsupported video format (not I420): format={format}")
             }
             Error::InvalidYuvSize => write!(f, "invalid input YUV size"),
+            Error::InvalidParameter(msg) => write!(f, "invalid parameter: {msg}"),
         }
     }
 }
@@ -98,16 +103,13 @@ pub enum VideoCodecType {
 }
 
 /// H.264 エンコーディングプロファイル
+///
+/// OpenH264 は Constrained Baseline Profile のみ対応している (README 参照)。
+/// フル Baseline (ASO/FMO/冗長スライス)、Main、High には対応していない。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum H264EncodingProfile {
     /// Constrained Baseline プロファイル
     ConstrainedBaseline,
-    /// Baseline プロファイル
-    Baseline,
-    /// Main プロファイル
-    Main,
-    /// High プロファイル
-    High,
 }
 
 /// コーデック固有のエンコードプロファイル情報
@@ -151,19 +153,6 @@ pub struct CodecInfo {
 }
 
 // ============================================================================
-
-/// H.264 プロファイル
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Profile {
-    /// Constrained Baseline プロファイル
-    ConstrainedBaseline,
-    /// Baseline プロファイル
-    Baseline,
-    /// Main プロファイル
-    Main,
-    /// High プロファイル
-    High,
-}
 
 /// H.264 レベル
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -376,23 +365,17 @@ impl Openh264Library {
     }
 
     /// 各プロファイルでエンコーダーの初期化を試行して対応プロファイルを検出する
+    /// OpenH264 は Constrained Baseline Profile のみ対応 (README 参照)。
+    /// PRO_MAIN/PRO_HIGH は InitializeExt で受け入れられるが、
+    /// 実際の符号化能力は Constrained Baseline + CABAC に留まり、
+    /// 8x8 DCT 変換 (High 必須) 等は未実装。
     fn detect_supported_profiles(&self) -> Vec<H264EncodingProfile> {
-        let candidates = [
-            (
-                sys::EProfileIdc_PRO_BASELINE,
-                H264EncodingProfile::ConstrainedBaseline,
-            ),
-            (sys::EProfileIdc_PRO_BASELINE, H264EncodingProfile::Baseline),
-            (sys::EProfileIdc_PRO_MAIN, H264EncodingProfile::Main),
-            (sys::EProfileIdc_PRO_HIGH, H264EncodingProfile::High),
-        ];
-
         let mut profiles = Vec::new();
-        for (profile_idc, profile) in candidates {
-            if self.is_profile_supported(profile_idc) {
-                profiles.push(profile);
-            }
+
+        if self.is_profile_supported(sys::EProfileIdc_PRO_BASELINE) {
+            profiles.push(H264EncodingProfile::ConstrainedBaseline);
         }
+
         profiles
     }
 
@@ -503,6 +486,10 @@ impl Decoder {
     /// 出力は I420 (YUV 4:2:0 planar) 形式。OpenH264 のデコーダーは I420 のみ出力する。
     /// B フレームは存在しない前提（入力と出力の順番が一致する）。
     pub fn decode(&mut self, data: &[u8]) -> Result<Option<DecodedFrame>, Error> {
+        let data_len = c_int::try_from(data.len()).map_err(|_| {
+            Error::InvalidParameter("decode input data exceeds c_int::MAX".to_string())
+        })?;
+
         let mut info = MaybeUninit::<sys::SBufferInfo>::zeroed();
         unsafe {
             let mut yuv = [std::ptr::null_mut(); 3];
@@ -512,7 +499,7 @@ impl Decoder {
                 .ok_or(Error::UnavailableMethod(name))?(
                 self.inner,
                 data.as_ptr(),
-                data.len() as c_int,
+                data_len,
                 yuv.as_mut_ptr(),
                 info.as_mut_ptr(),
             );
@@ -695,13 +682,14 @@ pub struct EncoderConfig {
     /// FPS の分母
     pub fps_denominator: usize,
 
-    /// H.264 プロファイル (None: OpenH264 自動検出)
-    pub profile: Option<Profile>,
-
     /// H.264 レベル (None: OpenH264 自動検出)
     pub level: Option<Level>,
 
     /// エントロピー符号化モード (None: CAVLC)
+    ///
+    /// CABAC を指定した場合、OpenH264 は SPS の profile_idc を自動的に
+    /// PRO_HIGH (100) に設定する。ただし実際の符号化能力は
+    /// Constrained Baseline + CABAC に留まる。
     pub entropy_coding_mode: Option<EntropyCodingMode>,
 
     /// 複雑度モード (None: LOW_COMPLEXITY)
@@ -770,7 +758,6 @@ impl EncoderConfig {
             target_bitrate,
             fps_numerator,
             fps_denominator,
-            profile: None,
             level: None,
             entropy_coding_mode: None,
             complexity_mode: None,
@@ -826,16 +813,6 @@ pub enum SliceMode {
     FixedCount(usize),
     /// サイズ制限スライス
     SizeConstrained(usize),
-}
-
-impl Profile {
-    fn to_sys(self) -> sys::EProfileIdc {
-        match self {
-            Profile::ConstrainedBaseline | Profile::Baseline => sys::EProfileIdc_PRO_BASELINE,
-            Profile::Main => sys::EProfileIdc_PRO_MAIN,
-            Profile::High => sys::EProfileIdc_PRO_HIGH,
-        }
-    }
 }
 
 impl Level {
@@ -967,10 +944,10 @@ fn apply_config_to_param(param: &mut sys::SEncParamExt, config: &EncoderConfig) 
     }
 
     // 空間レイヤー設定
+    // OpenH264 は Constrained Baseline Profile のみ対応 (README 参照)。
+    // プロファイルは PRO_UNKNOWN のまま残し、entropy_coding_mode に基づいて
+    // OpenH264 が自動選択する (CAVLC → PRO_BASELINE, CABAC → PRO_HIGH)。
     for layer in &mut param.sSpatialLayers[..param.iSpatialLayerNum as usize] {
-        if let Some(profile) = config.profile {
-            layer.uiProfileIdc = profile.to_sys();
-        }
         if let Some(level) = config.level {
             layer.uiLevelIdc = level.to_sys();
         }
@@ -1001,6 +978,12 @@ fn apply_config_to_param(param: &mut sys::SEncParamExt, config: &EncoderConfig) 
 impl Encoder {
     /// エンコーダーインスタンスを生成する
     pub fn new(lib: Openh264Library, config: EncoderConfig) -> Result<Self, Error> {
+        if config.fps_numerator == 0 || config.fps_denominator == 0 {
+            return Err(Error::InvalidParameter(
+                "fps_numerator and fps_denominator must be non-zero".to_string(),
+            ));
+        }
+
         let mut inner = std::ptr::null_mut();
         let mut param = MaybeUninit::<sys::SEncParamExt>::zeroed();
         let pic = MaybeUninit::<sys::SSourcePicture>::zeroed();
@@ -1087,6 +1070,12 @@ impl Encoder {
         fps_numerator: usize,
         fps_denominator: usize,
     ) -> Result<(), Error> {
+        if fps_numerator == 0 || fps_denominator == 0 {
+            return Err(Error::InvalidParameter(
+                "fps_numerator and fps_denominator must be non-zero".to_string(),
+            ));
+        }
+
         unsafe {
             let mut fps = fps_numerator as f32 / fps_denominator as f32;
             let name = "ISVCEncoder.SetOption";
@@ -1158,6 +1147,12 @@ impl Encoder {
     /// OpenH264 の `SetOption(ENCODER_OPTION_SVC_ENCODE_PARAM_EXT)` を使用するため、
     /// エンコーダーの再生成よりも軽量。
     pub fn set_config(&mut self, config: EncoderConfig) -> Result<(), Error> {
+        if config.fps_numerator == 0 || config.fps_denominator == 0 {
+            return Err(Error::InvalidParameter(
+                "fps_numerator and fps_denominator must be non-zero".to_string(),
+            ));
+        }
+
         unsafe {
             let mut param = MaybeUninit::<sys::SEncParamExt>::zeroed();
             let name = "ISVCEncoder.GetOption";
@@ -1350,7 +1345,7 @@ fn skip_start_code(data: &[u8]) -> &[u8] {
 }
 
 /// エンコードされた映像フレーム
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct EncodedFrame {
     /// フレームタイプ
     pub frame_type: FrameType,

@@ -1,6 +1,5 @@
 use shiguredo_openh264::{
-    Decoder, EncodeOptions, Encoder, EncoderConfig, FrameType, Openh264Library, Profile,
-    RateControlMode,
+    Decoder, EncodeOptions, Encoder, EncoderConfig, FrameType, Openh264Library, RateControlMode,
 };
 
 /// OpenH264 ライブラリをロードする
@@ -235,7 +234,6 @@ fn roundtrip_colorbar(config: EncoderConfig, num_frames: usize, min_psnr_db: f64
 #[test]
 fn roundtrip_constrained_baseline_quality() {
     let config = EncoderConfig {
-        profile: Some(Profile::ConstrainedBaseline),
         rate_control_mode: Some(RateControlMode::Quality),
         intra_period: Some(30),
         ..EncoderConfig::new(320, 240, 1_000_000, 30, 1)
@@ -243,11 +241,10 @@ fn roundtrip_constrained_baseline_quality() {
     roundtrip_colorbar(config, 30, 25.0);
 }
 
-/// High + Bitrate モードのラウンドトリップ（PSNR 検証）
+/// CABAC + Bitrate モードのラウンドトリップ（PSNR 検証）
 #[test]
-fn roundtrip_high_bitrate() {
+fn roundtrip_cabac_bitrate() {
     let config = EncoderConfig {
-        profile: Some(Profile::High),
         rate_control_mode: Some(RateControlMode::Bitrate),
         entropy_coding_mode: Some(shiguredo_openh264::EntropyCodingMode::Cabac),
         intra_period: Some(30),
@@ -265,7 +262,6 @@ fn roundtrip_force_idr() {
     let num_frames = 15;
 
     let config = EncoderConfig {
-        profile: Some(Profile::High),
         rate_control_mode: Some(RateControlMode::Quality),
         intra_period: Some(300),
         ..EncoderConfig::new(width, height, 1_000_000, 30, 1)

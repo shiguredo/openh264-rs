@@ -91,10 +91,9 @@ if let Some(frame) = encoder.encode(&y_data, &u_data, &v_data, &EncodeOptions::d
 オプションを指定する場合:
 
 ```rust
-use shiguredo_openh264::{EncoderConfig, Profile, RateControlMode};
+use shiguredo_openh264::{EncoderConfig, RateControlMode};
 
 let config = EncoderConfig {
-    profile: Some(Profile::Main),
     rate_control_mode: Some(RateControlMode::Bitrate),
     ..EncoderConfig::new(1920, 1080, 2_000_000, 30, 1)
 };

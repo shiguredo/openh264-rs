@@ -6,7 +6,7 @@ use shiguredo_mp4::mux::{
     Mp4FileMuxer, Mp4FileMuxerOptions, Sample, estimate_maximum_moov_box_size,
 };
 use shiguredo_openh264::{
-    EncodeOptions, EncodedFrame, Encoder, EncoderConfig, Openh264Library, Profile, RateControlMode,
+    EncodeOptions, EncodedFrame, Encoder, EncoderConfig, Openh264Library, RateControlMode,
 };
 use std::env;
 use std::fs::File;
@@ -26,7 +26,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let lib = Openh264Library::load(&openh264_path)?;
     let config = EncoderConfig {
-        profile: Some(Profile::ConstrainedBaseline),
         intra_period: Some(30),
         rate_control_mode: Some(RateControlMode::Bitrate),
         ..EncoderConfig::new(WIDTH as usize, HEIGHT as usize, 1_000_000, FPS as usize, 1)

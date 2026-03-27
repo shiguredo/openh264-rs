@@ -60,8 +60,6 @@ fn main() {
                 "pub struct ISVCDecoder;\n",
                 "pub struct OpenH264Version;\n",
                 "pub const EProfileIdc_PRO_BASELINE: EProfileIdc = 66;\n",
-                "pub const EProfileIdc_PRO_MAIN: EProfileIdc = 77;\n",
-                "pub const EProfileIdc_PRO_HIGH: EProfileIdc = 100;\n",
                 "pub const ELevelIdc_LEVEL_1_0: ELevelIdc = 10;\n",
                 "pub const ELevelIdc_LEVEL_1_1: ELevelIdc = 11;\n",
                 "pub const ELevelIdc_LEVEL_1_2: ELevelIdc = 12;\n",
