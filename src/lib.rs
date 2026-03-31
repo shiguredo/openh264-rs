@@ -1587,6 +1587,14 @@ impl Encoder {
                         continue;
                     }
                     let nal_len = nal_len as usize;
+
+                    // from_raw_parts の前に次のオフセットが妥当か検証する
+                    let next_offset = offset.checked_add(nal_len).ok_or_else(|| {
+                        Error::InvalidParameter(format!(
+                            "NAL offset overflow at nal_len={nal_len}, offset={offset}",
+                        ))
+                    })?;
+
                     let nal_data =
                         std::slice::from_raw_parts(layer_info.pBsBuf.add(offset), nal_len);
 
@@ -1614,11 +1622,7 @@ impl Encoder {
                         data.extend_from_slice(nal_data);
                     }
 
-                    offset = offset.checked_add(nal_len).ok_or_else(|| {
-                        Error::InvalidParameter(format!(
-                            "NAL offset overflow at nal_len={nal_len}, offset={offset}",
-                        ))
-                    })?;
+                    offset = next_offset;
                 }
             }
 
