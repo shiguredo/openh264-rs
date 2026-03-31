@@ -2,6 +2,16 @@
 # See https://prek.j178.dev for more information.
 #:schema https://www.schemastore.org/prek.json
 
+exclude = { glob = ["target/**"] }
+
+[[repos]]
+repo = "builtin"
+hooks = [
+  { id = "trailing-whitespace" },
+  { id = "end-of-file-fixer" },
+  { id = "check-toml" },
+]
+
 [[repos]]
 repo = "local"
 hooks = [
@@ -11,7 +21,8 @@ hooks = [
     entry = "cargo fmt --all -- --check",
     language = "system",
     types = ["rust"],
-    pass_filenames = false
+    pass_filenames = false,
+    priority = 0,
   },
   {
     id = "cargo-clippy",
@@ -19,6 +30,7 @@ hooks = [
     entry = "cargo clippy --all-targets --all-features -- -D warnings",
     language = "system",
     types = ["rust"],
-    pass_filenames = false
-  }
+    pass_filenames = false,
+    priority = 10,
+  },
 ]
