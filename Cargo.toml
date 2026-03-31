@@ -1,0 +1,22 @@
+[package]
+name = "shiguredo_openh264"
+version = "2026.1.0"
+edition = "2024"
+rust-version = "1.88"
+authors = ["Shiguredo Inc."]
+license = "Apache-2.0"
+description = "Rust binding for OpenH264"
+homepage = "https://github.com/shiguredo/openh264-rs"
+repository = "https://github.com/shiguredo/openh264-rs"
+build = "build.rs"
+include = ["/src/**/*", "build.rs", "LICENSE", "README.md"]
+
+[build-dependencies]
+bindgen = "0.72"
+shiguredo_toml = "2026.1"
+
+
+# 以降は外部ライブラリビルド用のメタデータ
+# (この内容は build.rs の中からのみ参照される)
+[package.metadata.external-dependencies]
+openh264 = { url = "https://github.com/cisco/openh264", version = "v2.6.0" }
