@@ -81,10 +81,10 @@ fn generate_dummy_i420(
     (y_plane, u_plane, v_plane)
 }
 
-/// Y プレーン同士の PSNR を計算する（dB）
+/// プレーン同士の PSNR を計算する（dB）
 ///
 /// 値が大きいほど入力と出力が近い。一般に 30dB 以上あれば視覚的に良好。
-fn psnr_y(original: &[u8], decoded: &[u8]) -> f64 {
+fn psnr(original: &[u8], decoded: &[u8]) -> f64 {
     assert_eq!(original.len(), decoded.len());
     let mut mse_sum: f64 = 0.0;
     for i in 0..original.len() {
@@ -98,12 +98,52 @@ fn psnr_y(original: &[u8], decoded: &[u8]) -> f64 {
     10.0 * (255.0_f64 * 255.0 / mse).log10()
 }
 
-/// エンコード→デコードのラウンドトリップを実行し、デコード結果の Y プレーンを返す
+/// デコード結果の YUV プレーン（ストライド除去済み）
+struct DecodedFrame {
+    y: Vec<u8>,
+    u: Vec<u8>,
+    v: Vec<u8>,
+}
+
+/// デコードフレームからストライド分のパディングを除去して YUV プレーンを抽出する
+fn extract_yuv(frame: &shiguredo_openh264::DecodedFrame) -> DecodedFrame {
+    let width = frame.width();
+    let height = frame.height();
+    let uv_width = width.div_ceil(2);
+    let uv_height = height.div_ceil(2);
+
+    let y_stride = frame.y_stride();
+    let u_stride = frame.u_stride();
+    let v_stride = frame.v_stride();
+
+    let mut y_data = Vec::with_capacity(width * height);
+    for row in 0..height {
+        y_data.extend_from_slice(&frame.y_plane()[row * y_stride..row * y_stride + width]);
+    }
+
+    let mut u_data = Vec::with_capacity(uv_width * uv_height);
+    for row in 0..uv_height {
+        u_data.extend_from_slice(&frame.u_plane()[row * u_stride..row * u_stride + uv_width]);
+    }
+
+    let mut v_data = Vec::with_capacity(uv_width * uv_height);
+    for row in 0..uv_height {
+        v_data.extend_from_slice(&frame.v_plane()[row * v_stride..row * v_stride + uv_width]);
+    }
+
+    DecodedFrame {
+        y: y_data,
+        u: u_data,
+        v: v_data,
+    }
+}
+
+/// エンコード→デコードのラウンドトリップを実行し、デコード結果の YUV プレーンを返す
 fn roundtrip(
     lib: &Openh264Library,
     config: EncoderConfig,
     frames: &[(Vec<u8>, Vec<u8>, Vec<u8>)],
-) -> Vec<Vec<u8>> {
+) -> Vec<DecodedFrame> {
     let mut encoder = Encoder::new(lib.clone(), config).expect("failed to create encoder");
     let options = EncodeOptions::default();
 
@@ -127,40 +167,23 @@ fn roundtrip(
     }
     assert!(encoded_count > 0, "no encoded frames were produced");
 
-    // デコード: フレーム単位で渡す代わりに全体を一度に渡す方式は OpenH264 では使えないので、
-    // NAL ユニット単位で分割してデコーダーに渡す
+    // デコード: NAL ユニット単位で分割してデコーダーに渡す
     let mut decoder = Decoder::new(lib.clone()).expect("failed to create decoder");
-    let mut decoded_y_planes = Vec::new();
+    let mut decoded_frames = Vec::new();
 
-    // Annex B ストリームを NAL ユニット単位に分割する
     let nalu_list = split_annex_b(&bitstream);
     for nalu in &nalu_list {
         if let Some(frame) = decoder.decode(nalu).expect("failed to decode") {
-            // デコード結果の Y プレーンからストライド分のパディングを除去する
-            let width = frame.width();
-            let height = frame.height();
-            let y_stride = frame.y_stride();
-            let mut y_data = Vec::with_capacity(width * height);
-            for row in 0..height {
-                y_data.extend_from_slice(&frame.y_plane()[row * y_stride..row * y_stride + width]);
-            }
-            decoded_y_planes.push(y_data);
+            decoded_frames.push(extract_yuv(&frame));
         }
     }
 
     // フラッシュ
     if let Some(frame) = decoder.finish().expect("failed to finish") {
-        let width = frame.width();
-        let height = frame.height();
-        let y_stride = frame.y_stride();
-        let mut y_data = Vec::with_capacity(width * height);
-        for row in 0..height {
-            y_data.extend_from_slice(&frame.y_plane()[row * y_stride..row * y_stride + width]);
-        }
-        decoded_y_planes.push(y_data);
+        decoded_frames.push(extract_yuv(&frame));
     }
 
-    decoded_y_planes
+    decoded_frames
 }
 
 /// Annex B ストリームをスタートコード (0x00000001 または 0x000001) で分割する
@@ -201,7 +224,14 @@ fn split_annex_b(data: &[u8]) -> Vec<Vec<u8>> {
 }
 
 /// カラーバーを使ったラウンドトリップで PSNR を検証するヘルパー
-fn roundtrip_colorbar(config: EncoderConfig, num_frames: usize, min_psnr_db: f64) {
+///
+/// Y プレーンは `min_psnr_y_db` 以上、U/V プレーンは `min_psnr_uv_db` 以上を要求する。
+fn roundtrip_colorbar(
+    config: EncoderConfig,
+    num_frames: usize,
+    min_psnr_y_db: f64,
+    min_psnr_uv_db: f64,
+) {
     let lib = load_library();
     let width = config.width;
     let height = config.height;
@@ -211,21 +241,31 @@ fn roundtrip_colorbar(config: EncoderConfig, num_frames: usize, min_psnr_db: f64
         .map(|_| (y.clone(), u.clone(), v.clone()))
         .collect();
 
-    let decoded_y_planes = roundtrip(&lib, config, &frames);
+    let decoded_frames = roundtrip(&lib, config, &frames);
 
     assert_eq!(
-        decoded_y_planes.len(),
+        decoded_frames.len(),
         num_frames,
         "decoded {} frames, expected {num_frames}",
-        decoded_y_planes.len()
+        decoded_frames.len()
     );
 
-    for (i, decoded_y) in decoded_y_planes.iter().enumerate() {
-        let psnr = psnr_y(&y, decoded_y);
-        eprintln!("frame {i}: PSNR = {psnr:.1} dB");
+    for (i, decoded) in decoded_frames.iter().enumerate() {
+        let psnr_y = psnr(&y, &decoded.y);
+        let psnr_u = psnr(&u, &decoded.u);
+        let psnr_v = psnr(&v, &decoded.v);
+        eprintln!("frame {i}: PSNR Y={psnr_y:.1} dB, U={psnr_u:.1} dB, V={psnr_v:.1} dB");
         assert!(
-            psnr >= min_psnr_db,
-            "frame {i}: PSNR {psnr:.1} dB < {min_psnr_db} dB"
+            psnr_y >= min_psnr_y_db,
+            "frame {i}: Y PSNR {psnr_y:.1} dB < {min_psnr_y_db} dB"
+        );
+        assert!(
+            psnr_u >= min_psnr_uv_db,
+            "frame {i}: U PSNR {psnr_u:.1} dB < {min_psnr_uv_db} dB"
+        );
+        assert!(
+            psnr_v >= min_psnr_uv_db,
+            "frame {i}: V PSNR {psnr_v:.1} dB < {min_psnr_uv_db} dB"
         );
     }
 }
@@ -238,7 +278,7 @@ fn roundtrip_constrained_baseline_quality() {
         intra_period: Some(30),
         ..EncoderConfig::new(320, 240, 1_000_000, 30, 1)
     };
-    roundtrip_colorbar(config, 30, 25.0);
+    roundtrip_colorbar(config, 30, 25.0, 20.0);
 }
 
 /// CABAC + Bitrate モードのラウンドトリップ（PSNR 検証）
@@ -250,7 +290,7 @@ fn roundtrip_cabac_bitrate() {
         intra_period: Some(30),
         ..EncoderConfig::new(320, 240, 1_000_000, 30, 1)
     };
-    roundtrip_colorbar(config, 30, 25.0);
+    roundtrip_colorbar(config, 30, 25.0, 20.0);
 }
 
 /// IDR 強制挿入のラウンドトリップ

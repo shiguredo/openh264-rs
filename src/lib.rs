@@ -13,7 +13,6 @@ use std::{
     num::NonZeroUsize,
     path::{Path, PathBuf},
     sync::Arc,
-    time::Duration,
 };
 
 mod dl;
@@ -407,7 +406,8 @@ impl Openh264Library {
                 param.iUsageType = sys::EUsageType_CAMERA_VIDEO_REAL_TIME;
 
                 // 空間レイヤーにプロファイルを設定する
-                for layer in &mut param.sSpatialLayers[..param.iSpatialLayerNum as usize] {
+                let spatial_layer_count_val = spatial_layer_count(&param);
+                for layer in &mut param.sSpatialLayers[..spatial_layer_count_val] {
                     layer.uiProfileIdc = profile_idc;
                     layer.iVideoWidth = 1920;
                     layer.iVideoHeight = 1080;
@@ -466,6 +466,13 @@ impl Decoder {
             let code = lib.call(name, |f: WelsCreateDecoder| f(&mut inner))?;
             Error::check(code, name)?;
 
+            if inner.is_null() {
+                return Err(Error::Openh264Error {
+                    code: -1,
+                    function: name,
+                });
+            }
+
             let mut param = param.assume_init();
             param.pFileNameRestructed = std::ptr::null_mut();
             param.uiTargetDqLayer = 1;
@@ -521,7 +528,7 @@ impl Decoder {
                 });
             }
 
-            Ok(Some(DecodedFrame::from_buffer_info(&info)))
+            Ok(Some(DecodedFrame::from_buffer_info(&info)?))
         }
     }
 
@@ -554,7 +561,7 @@ impl Decoder {
                 });
             }
 
-            Ok(Some(DecodedFrame::from_buffer_info(&info)))
+            Ok(Some(DecodedFrame::from_buffer_info(&info)?))
         }
     }
 }
@@ -591,24 +598,59 @@ pub struct DecodedFrame {
 
 impl DecodedFrame {
     /// OpenH264 の `SBufferInfo` から YUV データをコピーして `DecodedFrame` を構築する
-    unsafe fn from_buffer_info(info: &sys::SBufferInfo) -> Self {
+    ///
+    /// 各プレーンポインタが NULL の場合はエラーを返す。
+    unsafe fn from_buffer_info(info: &sys::SBufferInfo) -> Result<Self, Error> {
         unsafe {
-            let width = info.UsrData.sSystemBuffer.iWidth as usize;
-            let height = info.UsrData.sSystemBuffer.iHeight as usize;
-            let y_stride = info.UsrData.sSystemBuffer.iStride[0] as usize;
-            let u_stride = info.UsrData.sSystemBuffer.iStride[1] as usize;
+            let raw_width = info.UsrData.sSystemBuffer.iWidth;
+            let raw_height = info.UsrData.sSystemBuffer.iHeight;
+            let raw_y_stride = info.UsrData.sSystemBuffer.iStride[0];
+            let raw_u_stride = info.UsrData.sSystemBuffer.iStride[1];
+
+            // FFI が返した寸法・ストライドが負値の場合、as usize で巨大値になり
+            // from_raw_parts で未定義動作になるため事前に検証する
+            if raw_width <= 0 || raw_height <= 0 || raw_y_stride <= 0 || raw_u_stride <= 0 {
+                return Err(Error::InvalidParameter(format!(
+                    "decoded frame has invalid dimensions: width={raw_width}, height={raw_height}, y_stride={raw_y_stride}, u_stride={raw_u_stride}",
+                )));
+            }
+
+            let width = raw_width as usize;
+            let height = raw_height as usize;
+            let y_stride = raw_y_stride as usize;
+            let u_stride = raw_u_stride as usize;
             let v_stride = u_stride;
 
-            let y_size = height * y_stride;
+            // FFI が極端に大きい正値を返すと乗算がオーバーフローするため checked_mul で検証する
+            let y_size = height.checked_mul(y_stride).ok_or_else(|| {
+                Error::InvalidParameter(format!(
+                    "decoded frame Y plane size overflow: height={height}, y_stride={y_stride}",
+                ))
+            })?;
             let uv_height = height.div_ceil(2);
-            let u_size = uv_height * u_stride;
-            let v_size = uv_height * v_stride;
+            let u_size = uv_height.checked_mul(u_stride).ok_or_else(|| {
+                Error::InvalidParameter(format!(
+                    "decoded frame U plane size overflow: uv_height={uv_height}, u_stride={u_stride}",
+                ))
+            })?;
+            let v_size = uv_height.checked_mul(v_stride).ok_or_else(|| {
+                Error::InvalidParameter(format!(
+                    "decoded frame V plane size overflow: uv_height={uv_height}, v_stride={v_stride}",
+                ))
+            })?;
+
+            // FFI 側の異常状態で pDst が NULL のまま返される可能性がある
+            if info.pDst[0].is_null() || info.pDst[1].is_null() || info.pDst[2].is_null() {
+                return Err(Error::InvalidParameter(
+                    "decoded frame pDst plane pointer is null".to_string(),
+                ));
+            }
 
             let y_data = std::slice::from_raw_parts(info.pDst[0], y_size).to_vec();
             let u_data = std::slice::from_raw_parts(info.pDst[1], u_size).to_vec();
             let v_data = std::slice::from_raw_parts(info.pDst[2], v_size).to_vec();
 
-            Self {
+            Ok(Self {
                 width,
                 height,
                 y_stride,
@@ -617,7 +659,7 @@ impl DecodedFrame {
                 y_data,
                 u_data,
                 v_data,
-            }
+            })
         }
     }
 
@@ -865,6 +907,103 @@ fn validate_config(config: &EncoderConfig) -> Result<(), Error> {
         ));
     }
 
+    // encode() で fps_numerator as u32 による Duration 除算を行うため、
+    // u32 に収まらない値は除算パニックの原因になる
+    if u32::try_from(config.fps_numerator).is_err() {
+        return Err(Error::InvalidParameter(format!(
+            "fps_numerator {} exceeds u32 max ({})",
+            config.fps_numerator,
+            u32::MAX,
+        )));
+    }
+
+    if u32::try_from(config.fps_denominator).is_err() {
+        return Err(Error::InvalidParameter(format!(
+            "fps_denominator {} exceeds u32 max ({})",
+            config.fps_denominator,
+            u32::MAX,
+        )));
+    }
+
+    // FFI 境界の数値範囲チェック: usize / NonZeroUsize から c_int / c_ushort / c_uint への
+    // as キャストはサイレントに切り詰めるため、事前に範囲を検証する
+
+    if c_int::try_from(config.width).is_err() {
+        return Err(Error::InvalidParameter(format!(
+            "width {} exceeds c_int max ({})",
+            config.width,
+            c_int::MAX,
+        )));
+    }
+
+    if c_int::try_from(config.height).is_err() {
+        return Err(Error::InvalidParameter(format!(
+            "height {} exceeds c_int max ({})",
+            config.height,
+            c_int::MAX,
+        )));
+    }
+
+    // iMaxSpatialBitrate = target_bitrate * 2 を c_int にキャストするため、
+    // target_bitrate の上限は c_int::MAX / 2
+    const TARGET_BITRATE_MAX: usize = (c_int::MAX / 2) as usize;
+    if config.target_bitrate > TARGET_BITRATE_MAX {
+        return Err(Error::InvalidParameter(format!(
+            "target_bitrate {} exceeds max ({}) (iMaxSpatialBitrate = target_bitrate * 2 must fit in c_int)",
+            config.target_bitrate, TARGET_BITRATE_MAX,
+        )));
+    }
+
+    if let Some(count) = config.ref_frame_count
+        && c_int::try_from(count.get()).is_err()
+    {
+        return Err(Error::InvalidParameter(format!(
+            "ref_frame_count {} exceeds c_int max ({})",
+            count,
+            c_int::MAX,
+        )));
+    }
+
+    if let Some(count) = config.thread_count
+        && c_ushort::try_from(count.get()).is_err()
+    {
+        return Err(Error::InvalidParameter(format!(
+            "thread_count {} exceeds c_ushort max ({})",
+            count,
+            c_ushort::MAX,
+        )));
+    }
+
+    if let Some(layers) = config.spatial_layers
+        && c_int::try_from(layers.get()).is_err()
+    {
+        return Err(Error::InvalidParameter(format!(
+            "spatial_layers {} exceeds c_int max ({})",
+            layers,
+            c_int::MAX,
+        )));
+    }
+
+    if let Some(layers) = config.temporal_layers
+        && c_int::try_from(layers.get()).is_err()
+    {
+        return Err(Error::InvalidParameter(format!(
+            "temporal_layers {} exceeds c_int max ({})",
+            layers,
+            c_int::MAX,
+        )));
+    }
+
+    if let Some(intra) = config.intra_period
+        && c_uint::try_from(intra).is_err()
+    {
+        return Err(Error::InvalidParameter(format!(
+            "intra_period {} exceeds c_uint max ({})",
+            intra,
+            c_uint::MAX,
+        )));
+    }
+
     if let Some(max_qp) = config.max_qp
         && max_qp > 51
     {
@@ -896,10 +1035,24 @@ fn validate_config(config: &EncoderConfig) -> Result<(), Error> {
                     "FixedCount slice count must be non-zero".to_string(),
                 ));
             }
+            SliceMode::FixedCount(count) if c_uint::try_from(count).is_err() => {
+                return Err(Error::InvalidParameter(format!(
+                    "FixedCount slice count {} exceeds c_uint max ({})",
+                    count,
+                    c_uint::MAX,
+                )));
+            }
             SliceMode::SizeConstrained(0) => {
                 return Err(Error::InvalidParameter(
                     "SizeConstrained size must be non-zero".to_string(),
                 ));
+            }
+            SliceMode::SizeConstrained(size) if c_uint::try_from(size).is_err() => {
+                return Err(Error::InvalidParameter(format!(
+                    "SizeConstrained size {} exceeds c_uint max ({})",
+                    size,
+                    c_uint::MAX,
+                )));
             }
             _ => {}
         }
@@ -911,6 +1064,18 @@ fn validate_config(config: &EncoderConfig) -> Result<(), Error> {
 /// `EncoderConfig` の内容を `SEncParamExt` に反映する
 ///
 /// `new()` と `reconfigure()` の共通処理。
+/// `SEncParamExt.iSpatialLayerNum` を `sSpatialLayers` 配列の有効インデックス範囲に収める
+///
+/// FFI が返した値が負値や配列長 (4) を超える場合は 0 にクランプする。
+fn spatial_layer_count(param: &sys::SEncParamExt) -> usize {
+    let n = param.iSpatialLayerNum;
+    if n > 0 && (n as usize) <= param.sSpatialLayers.len() {
+        n as usize
+    } else {
+        0
+    }
+}
+
 fn apply_config_to_param(param: &mut sys::SEncParamExt, config: &EncoderConfig) {
     param.iUsageType = sys::EUsageType_CAMERA_VIDEO_REAL_TIME;
     param.fMaxFrameRate = config.fps_numerator as f32 / config.fps_denominator as f32;
@@ -1006,7 +1171,8 @@ fn apply_config_to_param(param: &mut sys::SEncParamExt, config: &EncoderConfig) 
     // OpenH264 は Constrained Baseline Profile のみ対応 (README 参照)。
     // プロファイルは PRO_UNKNOWN のまま残し、entropy_coding_mode に基づいて
     // OpenH264 が自動選択する (CAVLC → PRO_BASELINE, CABAC → PRO_HIGH)。
-    for layer in &mut param.sSpatialLayers[..param.iSpatialLayerNum as usize] {
+    let spatial_layer_count_val = spatial_layer_count(param);
+    for layer in &mut param.sSpatialLayers[..spatial_layer_count_val] {
         if let Some(level) = config.level {
             layer.uiLevelIdc = level.to_sys();
         }
@@ -1046,6 +1212,13 @@ impl Encoder {
             let name = "WelsCreateSVCEncoder";
             let code = lib.call(name, |f: WelsCreateSVCEncoder| f(&mut inner))?;
             Error::check(code, name)?;
+
+            if inner.is_null() {
+                return Err(Error::Openh264Error {
+                    code: -1,
+                    function: name,
+                });
+            }
 
             let name = "ISVCEncoder.GetDefaultParams";
             let code = (**inner)
@@ -1099,6 +1272,14 @@ impl Encoder {
     /// OpenH264 の `SetOption(ENCODER_OPTION_BITRATE)` を使用する。
     /// 全空間レイヤーに対して一括で適用される。
     pub fn set_bitrate(&mut self, bitrate: usize) -> Result<(), Error> {
+        if c_int::try_from(bitrate).is_err() {
+            return Err(Error::InvalidParameter(format!(
+                "bitrate {} exceeds c_int max ({})",
+                bitrate,
+                c_int::MAX,
+            )));
+        }
+
         unsafe {
             let mut info = sys::SBitrateInfo {
                 iLayer: sys::LAYER_NUM_SPATIAL_LAYER_ALL,
@@ -1131,6 +1312,24 @@ impl Encoder {
             ));
         }
 
+        // encode() で fps_numerator as u32 による Duration 除算を行うため、
+        // u32 に収まらない値は除算パニックの原因になる
+        if u32::try_from(fps_numerator).is_err() {
+            return Err(Error::InvalidParameter(format!(
+                "fps_numerator {} exceeds u32 max ({})",
+                fps_numerator,
+                u32::MAX,
+            )));
+        }
+
+        if u32::try_from(fps_denominator).is_err() {
+            return Err(Error::InvalidParameter(format!(
+                "fps_denominator {} exceeds u32 max ({})",
+                fps_denominator,
+                u32::MAX,
+            )));
+        }
+
         unsafe {
             let mut fps = fps_numerator as f32 / fps_denominator as f32;
             let name = "ISVCEncoder.SetOption";
@@ -1161,6 +1360,22 @@ impl Encoder {
             ));
         }
 
+        if c_int::try_from(width).is_err() {
+            return Err(Error::InvalidParameter(format!(
+                "width {} exceeds c_int max ({})",
+                width,
+                c_int::MAX,
+            )));
+        }
+
+        if c_int::try_from(height).is_err() {
+            return Err(Error::InvalidParameter(format!(
+                "height {} exceeds c_int max ({})",
+                height,
+                c_int::MAX,
+            )));
+        }
+
         unsafe {
             let mut param = MaybeUninit::<sys::SEncParamExt>::zeroed();
             let name = "ISVCEncoder.GetOption";
@@ -1177,7 +1392,8 @@ impl Encoder {
             param.iPicWidth = width as c_int;
             param.iPicHeight = height as c_int;
 
-            for layer in &mut param.sSpatialLayers[..param.iSpatialLayerNum as usize] {
+            let spatial_layer_count_val = spatial_layer_count(&param);
+            for layer in &mut param.sSpatialLayers[..spatial_layer_count_val] {
                 layer.iVideoWidth = width as c_int;
                 layer.iVideoHeight = height as c_int;
             }
@@ -1265,8 +1481,13 @@ impl Encoder {
         options: &EncodeOptions,
     ) -> Result<Option<EncodedFrame>, Error> {
         let height = self.pic.iPicHeight as usize;
-        let y_size = height * self.pic.iStride[0] as usize;
-        let u_size = height.div_ceil(2) * self.pic.iStride[1] as usize;
+        let y_stride = self.pic.iStride[0] as usize;
+        let u_stride = self.pic.iStride[1] as usize;
+        let y_size = height.checked_mul(y_stride).ok_or(Error::InvalidYuvSize)?;
+        let u_size = height
+            .div_ceil(2)
+            .checked_mul(u_stride)
+            .ok_or(Error::InvalidYuvSize)?;
         let v_size = u_size;
         if y.len() != y_size || u.len() != u_size || v.len() != v_size {
             return Err(Error::InvalidYuvSize);
@@ -1288,9 +1509,11 @@ impl Encoder {
             self.pic.pData[1] = u.as_ptr().cast_mut();
             self.pic.pData[2] = v.as_ptr().cast_mut();
 
-            let timestamp = Duration::from_secs((self.frames * self.fps_denominator) as u64)
-                / self.fps_numerator as u32;
-            self.pic.uiTimeStamp = timestamp.as_millis() as c_longlong; // openh264 はミリ秒固定
+            // frames * fps_denominator が usize オーバーフローしないよう u128 で計算する。
+            // 結果のミリ秒を c_longlong (i64) に収める。
+            let total_secs_numer = self.frames as u128 * self.fps_denominator as u128;
+            let timestamp_ms = total_secs_numer * 1000 / self.fps_numerator as u128;
+            self.pic.uiTimeStamp = timestamp_ms as c_longlong; // openh264 はミリ秒固定
             self.frames += 1;
 
             let mut info = MaybeUninit::<sys::SFrameBSInfo>::zeroed();
@@ -1320,11 +1543,40 @@ impl Encoder {
             let mut pps_list = Vec::new();
             let mut data = Vec::new();
 
-            for layer_info in &info.sLayerInfo[..info.iLayerNum as usize] {
-                if layer_info.iNalCount == 0 {
-                    // カウントがゼロの場合には、環境によっては、
+            // iLayerNum が負値や配列上限 (128) を超える場合は異常
+            let layer_num =
+                if info.iLayerNum > 0 && (info.iLayerNum as usize) <= info.sLayerInfo.len() {
+                    info.iLayerNum as usize
+                } else if info.iLayerNum == 0 {
+                    0
+                } else {
+                    return Err(Error::InvalidParameter(format!(
+                        "iLayerNum {} is out of valid range",
+                        info.iLayerNum,
+                    )));
+                };
+
+            // H.264 の仕様上、1 レイヤーあたりの NAL 数が 65536 を超えることは実用上ありえない。
+            // FFI 側の異常値で from_raw_parts に巨大長を渡すのを防ぐための上限。
+            const MAX_NAL_COUNT: c_int = 65536;
+
+            for layer_info in &info.sLayerInfo[..layer_num] {
+                if layer_info.iNalCount <= 0 {
+                    // カウントがゼロまたは負値の場合には、環境によっては、
                     // pNalLengthInByte が不正なアドレスを指していて from_raw_parts() がクラッシュする
                     // 可能性があるので明示的にハンドリングする
+                    continue;
+                }
+
+                if layer_info.iNalCount > MAX_NAL_COUNT {
+                    return Err(Error::InvalidParameter(format!(
+                        "iNalCount {} exceeds max ({})",
+                        layer_info.iNalCount, MAX_NAL_COUNT,
+                    )));
+                }
+
+                // iNalCount > 0 でもポインタが NULL の可能性がある
+                if layer_info.pNalLengthInByte.is_null() || layer_info.pBsBuf.is_null() {
                     continue;
                 }
 
@@ -1335,7 +1587,19 @@ impl Encoder {
 
                 let mut offset = 0usize;
                 for &nal_len in nal_lengths {
+                    // NAL 長が負値の場合は as usize で巨大値になるため拒否する
+                    if nal_len <= 0 {
+                        continue;
+                    }
                     let nal_len = nal_len as usize;
+
+                    // from_raw_parts の前に次のオフセットが妥当か検証する
+                    let next_offset = offset.checked_add(nal_len).ok_or_else(|| {
+                        Error::InvalidParameter(format!(
+                            "NAL offset overflow at nal_len={nal_len}, offset={offset}",
+                        ))
+                    })?;
+
                     let nal_data =
                         std::slice::from_raw_parts(layer_info.pBsBuf.add(offset), nal_len);
 
@@ -1363,7 +1627,7 @@ impl Encoder {
                         data.extend_from_slice(nal_data);
                     }
 
-                    offset += nal_len;
+                    offset = next_offset;
                 }
             }
 
