@@ -865,6 +865,24 @@ fn validate_config(config: &EncoderConfig) -> Result<(), Error> {
         ));
     }
 
+    // encode() で fps_numerator as u32 による Duration 除算を行うため、
+    // u32 に収まらない値は除算パニックの原因になる
+    if u32::try_from(config.fps_numerator).is_err() {
+        return Err(Error::InvalidParameter(format!(
+            "fps_numerator {} exceeds u32 max ({})",
+            config.fps_numerator,
+            u32::MAX,
+        )));
+    }
+
+    if u32::try_from(config.fps_denominator).is_err() {
+        return Err(Error::InvalidParameter(format!(
+            "fps_denominator {} exceeds u32 max ({})",
+            config.fps_denominator,
+            u32::MAX,
+        )));
+    }
+
     // FFI 境界の数値範囲チェック: usize / NonZeroUsize から c_int / c_ushort / c_uint への
     // as キャストはサイレントに切り詰めるため、事前に範囲を検証する
 
@@ -884,11 +902,13 @@ fn validate_config(config: &EncoderConfig) -> Result<(), Error> {
         )));
     }
 
-    if c_int::try_from(config.target_bitrate).is_err() {
+    // iMaxSpatialBitrate = target_bitrate * 2 を c_int にキャストするため、
+    // target_bitrate の上限は c_int::MAX / 2
+    const TARGET_BITRATE_MAX: usize = (c_int::MAX / 2) as usize;
+    if config.target_bitrate > TARGET_BITRATE_MAX {
         return Err(Error::InvalidParameter(format!(
-            "target_bitrate {} exceeds c_int max ({})",
-            config.target_bitrate,
-            c_int::MAX,
+            "target_bitrate {} exceeds max ({}) (iMaxSpatialBitrate = target_bitrate * 2 must fit in c_int)",
+            config.target_bitrate, TARGET_BITRATE_MAX,
         )));
     }
 
@@ -1228,6 +1248,24 @@ impl Encoder {
             return Err(Error::InvalidParameter(
                 "fps_numerator and fps_denominator must be non-zero".to_string(),
             ));
+        }
+
+        // encode() で fps_numerator as u32 による Duration 除算を行うため、
+        // u32 に収まらない値は除算パニックの原因になる
+        if u32::try_from(fps_numerator).is_err() {
+            return Err(Error::InvalidParameter(format!(
+                "fps_numerator {} exceeds u32 max ({})",
+                fps_numerator,
+                u32::MAX,
+            )));
+        }
+
+        if u32::try_from(fps_denominator).is_err() {
+            return Err(Error::InvalidParameter(format!(
+                "fps_denominator {} exceeds u32 max ({})",
+                fps_denominator,
+                u32::MAX,
+            )));
         }
 
         unsafe {

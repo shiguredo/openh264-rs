@@ -60,6 +60,12 @@
 - [FIX] FFI 境界で `usize` / `NonZeroUsize` から `c_int` / `c_ushort` / `c_uint` への変換時に範囲チェックを追加する
   - `validate_config()` / `set_bitrate()` / `set_resolution()` で `try_from` による検証を行い、範囲外の値は `Error::InvalidParameter` を返す
   - @voluntas
+- [FIX] `fps_numerator` / `fps_denominator` が `u32` を超えると `encode()` でパニックする問題を修正する
+  - `validate_config()` / `set_frame_rate()` で `u32` 範囲チェックを追加する
+  - @voluntas
+- [FIX] `target_bitrate` が `c_int::MAX / 2` を超えると `iMaxSpatialBitrate` が負値になる問題を修正する
+  - `target_bitrate` の上限を `c_int::MAX / 2` に引き下げる
+  - @voluntas
 
 ### misc
 
