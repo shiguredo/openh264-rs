@@ -27,8 +27,8 @@ fn main() {
     }
     std::fs::create_dir(&out_build_dir).expect("failed to create build directory");
 
-    // Cargo.toml から依存ライブラリの Git URL とバージョンタグを取得する
-    let (git_url, version) = get_git_url_and_version();
+    // Cargo.toml から依存ライブラリの URL とバージョンタグを取得する
+    let (url, version) = get_url_and_version();
 
     // 各種メタデータを書き込む
     std::fs::write(
@@ -38,7 +38,7 @@ fn main() {
                 "pub const BUILD_METADATA_REPOSITORY: &str={:?};\n",
                 "pub const BUILD_METADATA_VERSION: &str={:?};\n",
             ),
-            git_url, version
+            url, version
         ),
     )
     .expect("failed to write metadata file");
@@ -83,7 +83,7 @@ fn main() {
     }
 
     // 依存ライブラリのリポジトリを取得する
-    git_clone_external_lib(&out_build_dir, &git_url, &version);
+    git_clone_external_lib(&out_build_dir, &url, &version);
 
     // バインディングを生成する
     bindgen::Builder::default()
@@ -95,7 +95,7 @@ fn main() {
 }
 
 // 外部ライブラリのリポジトリを git clone する
-fn git_clone_external_lib(build_dir: &Path, git_url: &str, version: &str) {
+fn git_clone_external_lib(build_dir: &Path, url: &str, version: &str) {
     let status = Command::new("git")
         .arg("clone")
         .arg("--depth")
@@ -103,7 +103,7 @@ fn git_clone_external_lib(build_dir: &Path, git_url: &str, version: &str) {
         .arg("--quiet")
         .arg("--branch")
         .arg(version)
-        .arg(git_url)
+        .arg(url)
         .current_dir(build_dir)
         .status()
         .expect("failed to execute git");
@@ -112,8 +112,8 @@ fn git_clone_external_lib(build_dir: &Path, git_url: &str, version: &str) {
     }
 }
 
-// Cargo.toml から依存ライブラリの Git URL とバージョンタグを取得する
-fn get_git_url_and_version() -> (String, String) {
+// Cargo.toml から依存ライブラリの URL とバージョンタグを取得する
+fn get_url_and_version() -> (String, String) {
     let cargo_toml =
         shiguredo_toml::from_str(include_str!("Cargo.toml")).expect("failed to parse Cargo.toml");
     let deps = cargo_toml
@@ -126,13 +126,13 @@ fn get_git_url_and_version() -> (String, String) {
                 "Cargo.toml does not contain [package.metadata.external-dependencies.{LIB_NAME}]"
             )
         });
-    let git_url = deps
-        .get("git")
+    let url = deps
+        .get("url")
         .and_then(|s| s.as_str())
-        .unwrap_or_else(|| panic!("missing 'git' in external-dependencies.{LIB_NAME}"));
+        .unwrap_or_else(|| panic!("missing 'url' in external-dependencies.{LIB_NAME}"));
     let version = deps
         .get("version")
         .and_then(|s| s.as_str())
         .unwrap_or_else(|| panic!("missing 'version' in external-dependencies.{LIB_NAME}"));
-    (git_url.to_string(), version.to_string())
+    (url.to_string(), version.to_string())
 }
