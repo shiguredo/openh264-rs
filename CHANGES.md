@@ -11,6 +11,11 @@
 
 ## develop
 
+
+## 2026.1.0
+
+**リリース日**: 2026-03-31
+
 - [ADD] `ComplexityMode` / `RateControlMode` / `SliceMode` enum を追加する
   - @voluntas
 - [ADD] `Openh264Library::supported_codecs()` を追加する
@@ -43,8 +48,6 @@
   - `entropy_coding: bool` を `entropy_coding_mode: Option<EntropyCodingMode>` に変更する
   - プロファイルは OpenH264 が `entropy_coding_mode` に基づいて自動選択する
   - @voluntas
-- [CHANGE] ビルド依存の `toml` クレートを `shiguredo_toml` に置き換える
-  - @voluntas
 - [CHANGE] バージョン不一致時の処理を `log::warn!` からエラーに変更する
   - `Error::VersionMismatch` バリアントを追加する
   - ランタイム依存の `log` クレートを削除する
@@ -54,6 +57,12 @@
   - @voluntas
 - [FIX] `Decoder::decode()` の入力データサイズが `c_int::MAX` を超える場合のチェックを追加する
   - @voluntas
+
+### misc
+
+- [CHANGE] ビルド依存の `toml` クレートを `shiguredo_toml` に置き換える
+  - @voluntas
+
 
 ## 2025.1.0
 
