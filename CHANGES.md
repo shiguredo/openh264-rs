@@ -80,6 +80,10 @@
   - @voluntas
 - [FIX] `iNalCount` に上限 (65536) を設けて異常な正値を拒否するようにする
   - @voluntas
+- [FIX] NAL オフセット加算を `checked_add` に変更してオーバーフロー時にエラーを返すようにする
+  - @voluntas
+- [FIX] タイムスタンプ計算を `u128` 経由に変更して長時間運転時のオーバーフローを防止する
+  - @voluntas
 
 ### misc
 

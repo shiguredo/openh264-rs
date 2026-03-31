@@ -13,7 +13,6 @@ use std::{
     num::NonZeroUsize,
     path::{Path, PathBuf},
     sync::Arc,
-    time::Duration,
 };
 
 mod dl;
@@ -1505,9 +1504,11 @@ impl Encoder {
             self.pic.pData[1] = u.as_ptr().cast_mut();
             self.pic.pData[2] = v.as_ptr().cast_mut();
 
-            let timestamp = Duration::from_secs((self.frames * self.fps_denominator) as u64)
-                / self.fps_numerator as u32;
-            self.pic.uiTimeStamp = timestamp.as_millis() as c_longlong; // openh264 はミリ秒固定
+            // frames * fps_denominator が usize オーバーフローしないよう u128 で計算する。
+            // 結果のミリ秒を c_longlong (i64) に収める。
+            let total_secs_numer = self.frames as u128 * self.fps_denominator as u128;
+            let timestamp_ms = total_secs_numer * 1000 / self.fps_numerator as u128;
+            self.pic.uiTimeStamp = timestamp_ms as c_longlong; // openh264 はミリ秒固定
             self.frames += 1;
 
             let mut info = MaybeUninit::<sys::SFrameBSInfo>::zeroed();
@@ -1613,7 +1614,11 @@ impl Encoder {
                         data.extend_from_slice(nal_data);
                     }
 
-                    offset += nal_len;
+                    offset = offset.checked_add(nal_len).ok_or_else(|| {
+                        Error::InvalidParameter(format!(
+                            "NAL offset overflow at nal_len={nal_len}, offset={offset}",
+                        ))
+                    })?;
                 }
             }
 
