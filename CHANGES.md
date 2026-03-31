@@ -76,6 +76,10 @@
   - @voluntas
 - [FIX] `iSpatialLayerNum` を安全な範囲に制限する `spatial_layer_count()` ヘルパーを追加する
   - @voluntas
+- [FIX] デコード面サイズの乗算を `checked_mul` に変更してオーバーフロー時にエラーを返すようにする
+  - @voluntas
+- [FIX] `iNalCount` に上限 (65536) を設けて異常な正値を拒否するようにする
+  - @voluntas
 
 ### misc
 

@@ -622,10 +622,23 @@ impl DecodedFrame {
             let u_stride = raw_u_stride as usize;
             let v_stride = u_stride;
 
-            let y_size = height * y_stride;
+            // FFI が極端に大きい正値を返すと乗算がオーバーフローするため checked_mul で検証する
+            let y_size = height.checked_mul(y_stride).ok_or_else(|| {
+                Error::InvalidParameter(format!(
+                    "decoded frame Y plane size overflow: height={height}, y_stride={y_stride}",
+                ))
+            })?;
             let uv_height = height.div_ceil(2);
-            let u_size = uv_height * u_stride;
-            let v_size = uv_height * v_stride;
+            let u_size = uv_height.checked_mul(u_stride).ok_or_else(|| {
+                Error::InvalidParameter(format!(
+                    "decoded frame U plane size overflow: uv_height={uv_height}, u_stride={u_stride}",
+                ))
+            })?;
+            let v_size = uv_height.checked_mul(v_stride).ok_or_else(|| {
+                Error::InvalidParameter(format!(
+                    "decoded frame V plane size overflow: uv_height={uv_height}, v_stride={v_stride}",
+                ))
+            })?;
 
             // FFI 側の異常状態で pDst が NULL のまま返される可能性がある
             if info.pDst[0].is_null() || info.pDst[1].is_null() || info.pDst[2].is_null() {
@@ -1537,12 +1550,23 @@ impl Encoder {
                     )));
                 };
 
+            // H.264 の仕様上、1 レイヤーあたりの NAL 数が 65536 を超えることは実用上ありえない。
+            // FFI 側の異常値で from_raw_parts に巨大長を渡すのを防ぐための上限。
+            const MAX_NAL_COUNT: c_int = 65536;
+
             for layer_info in &info.sLayerInfo[..layer_num] {
                 if layer_info.iNalCount <= 0 {
                     // カウントがゼロまたは負値の場合には、環境によっては、
                     // pNalLengthInByte が不正なアドレスを指していて from_raw_parts() がクラッシュする
                     // 可能性があるので明示的にハンドリングする
                     continue;
+                }
+
+                if layer_info.iNalCount > MAX_NAL_COUNT {
+                    return Err(Error::InvalidParameter(format!(
+                        "iNalCount {} exceeds max ({})",
+                        layer_info.iNalCount, MAX_NAL_COUNT,
+                    )));
                 }
 
                 // iNalCount > 0 でもポインタが NULL の可能性がある
