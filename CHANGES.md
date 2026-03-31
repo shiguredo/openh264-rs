@@ -70,6 +70,10 @@
   - @voluntas
 - [FIX] デコード済みフレームの YUV プレーンポインタとエンコード済み NAL ポインタの NULL チェックを追加する
   - @voluntas
+- [FIX] デコード結果の寸法・ストライドが負値の場合にエラーを返すようにする
+  - @voluntas
+- [FIX] エンコード出力の `iLayerNum` / `iNalCount` / NAL 長の負値・範囲外を検証するようにする
+  - @voluntas
 
 ### misc
 

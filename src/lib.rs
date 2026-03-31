@@ -602,10 +602,23 @@ impl DecodedFrame {
     /// 各プレーンポインタが NULL の場合はエラーを返す。
     unsafe fn from_buffer_info(info: &sys::SBufferInfo) -> Result<Self, Error> {
         unsafe {
-            let width = info.UsrData.sSystemBuffer.iWidth as usize;
-            let height = info.UsrData.sSystemBuffer.iHeight as usize;
-            let y_stride = info.UsrData.sSystemBuffer.iStride[0] as usize;
-            let u_stride = info.UsrData.sSystemBuffer.iStride[1] as usize;
+            let raw_width = info.UsrData.sSystemBuffer.iWidth;
+            let raw_height = info.UsrData.sSystemBuffer.iHeight;
+            let raw_y_stride = info.UsrData.sSystemBuffer.iStride[0];
+            let raw_u_stride = info.UsrData.sSystemBuffer.iStride[1];
+
+            // FFI が返した寸法・ストライドが負値の場合、as usize で巨大値になり
+            // from_raw_parts で未定義動作になるため事前に検証する
+            if raw_width <= 0 || raw_height <= 0 || raw_y_stride <= 0 || raw_u_stride <= 0 {
+                return Err(Error::InvalidParameter(format!(
+                    "decoded frame has invalid dimensions: width={raw_width}, height={raw_height}, y_stride={raw_y_stride}, u_stride={raw_u_stride}",
+                )));
+            }
+
+            let width = raw_width as usize;
+            let height = raw_height as usize;
+            let y_stride = raw_y_stride as usize;
+            let u_stride = raw_u_stride as usize;
             let v_stride = u_stride;
 
             let y_size = height * y_stride;
@@ -1496,9 +1509,22 @@ impl Encoder {
             let mut pps_list = Vec::new();
             let mut data = Vec::new();
 
-            for layer_info in &info.sLayerInfo[..info.iLayerNum as usize] {
-                if layer_info.iNalCount == 0 {
-                    // カウントがゼロの場合には、環境によっては、
+            // iLayerNum が負値や配列上限 (128) を超える場合は異常
+            let layer_num =
+                if info.iLayerNum > 0 && (info.iLayerNum as usize) <= info.sLayerInfo.len() {
+                    info.iLayerNum as usize
+                } else if info.iLayerNum == 0 {
+                    0
+                } else {
+                    return Err(Error::InvalidParameter(format!(
+                        "iLayerNum {} is out of valid range",
+                        info.iLayerNum,
+                    )));
+                };
+
+            for layer_info in &info.sLayerInfo[..layer_num] {
+                if layer_info.iNalCount <= 0 {
+                    // カウントがゼロまたは負値の場合には、環境によっては、
                     // pNalLengthInByte が不正なアドレスを指していて from_raw_parts() がクラッシュする
                     // 可能性があるので明示的にハンドリングする
                     continue;
@@ -1516,6 +1542,10 @@ impl Encoder {
 
                 let mut offset = 0usize;
                 for &nal_len in nal_lengths {
+                    // NAL 長が負値の場合は as usize で巨大値になるため拒否する
+                    if nal_len <= 0 {
+                        continue;
+                    }
                     let nal_len = nal_len as usize;
                     let nal_data =
                         std::slice::from_raw_parts(layer_info.pBsBuf.add(offset), nal_len);
