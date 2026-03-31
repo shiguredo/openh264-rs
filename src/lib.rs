@@ -1481,8 +1481,13 @@ impl Encoder {
         options: &EncodeOptions,
     ) -> Result<Option<EncodedFrame>, Error> {
         let height = self.pic.iPicHeight as usize;
-        let y_size = height * self.pic.iStride[0] as usize;
-        let u_size = height.div_ceil(2) * self.pic.iStride[1] as usize;
+        let y_stride = self.pic.iStride[0] as usize;
+        let u_stride = self.pic.iStride[1] as usize;
+        let y_size = height.checked_mul(y_stride).ok_or(Error::InvalidYuvSize)?;
+        let u_size = height
+            .div_ceil(2)
+            .checked_mul(u_stride)
+            .ok_or(Error::InvalidYuvSize)?;
         let v_size = u_size;
         if y.len() != y_size || u.len() != u_size || v.len() != v_size {
             return Err(Error::InvalidYuvSize);

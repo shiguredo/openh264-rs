@@ -84,6 +84,8 @@
   - @voluntas
 - [FIX] タイムスタンプ計算を `u128` 経由に変更して長時間運転時のオーバーフローを防止する
   - @voluntas
+- [FIX] `encode()` の入力サイズ計算を `checked_mul` に変更してオーバーフロー時にエラーを返すようにする
+  - @voluntas
 
 ### misc
 
