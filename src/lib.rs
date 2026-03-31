@@ -407,7 +407,8 @@ impl Openh264Library {
                 param.iUsageType = sys::EUsageType_CAMERA_VIDEO_REAL_TIME;
 
                 // 空間レイヤーにプロファイルを設定する
-                for layer in &mut param.sSpatialLayers[..param.iSpatialLayerNum as usize] {
+                let spatial_layer_count_val = spatial_layer_count(&param);
+                for layer in &mut param.sSpatialLayers[..spatial_layer_count_val] {
                     layer.uiProfileIdc = profile_idc;
                     layer.iVideoWidth = 1920;
                     layer.iVideoHeight = 1080;
@@ -1051,6 +1052,18 @@ fn validate_config(config: &EncoderConfig) -> Result<(), Error> {
 /// `EncoderConfig` の内容を `SEncParamExt` に反映する
 ///
 /// `new()` と `reconfigure()` の共通処理。
+/// `SEncParamExt.iSpatialLayerNum` を `sSpatialLayers` 配列の有効インデックス範囲に収める
+///
+/// FFI が返した値が負値や配列長 (4) を超える場合は 0 にクランプする。
+fn spatial_layer_count(param: &sys::SEncParamExt) -> usize {
+    let n = param.iSpatialLayerNum;
+    if n > 0 && (n as usize) <= param.sSpatialLayers.len() {
+        n as usize
+    } else {
+        0
+    }
+}
+
 fn apply_config_to_param(param: &mut sys::SEncParamExt, config: &EncoderConfig) {
     param.iUsageType = sys::EUsageType_CAMERA_VIDEO_REAL_TIME;
     param.fMaxFrameRate = config.fps_numerator as f32 / config.fps_denominator as f32;
@@ -1146,7 +1159,8 @@ fn apply_config_to_param(param: &mut sys::SEncParamExt, config: &EncoderConfig) 
     // OpenH264 は Constrained Baseline Profile のみ対応 (README 参照)。
     // プロファイルは PRO_UNKNOWN のまま残し、entropy_coding_mode に基づいて
     // OpenH264 が自動選択する (CAVLC → PRO_BASELINE, CABAC → PRO_HIGH)。
-    for layer in &mut param.sSpatialLayers[..param.iSpatialLayerNum as usize] {
+    let spatial_layer_count_val = spatial_layer_count(param);
+    for layer in &mut param.sSpatialLayers[..spatial_layer_count_val] {
         if let Some(level) = config.level {
             layer.uiLevelIdc = level.to_sys();
         }
@@ -1366,7 +1380,8 @@ impl Encoder {
             param.iPicWidth = width as c_int;
             param.iPicHeight = height as c_int;
 
-            for layer in &mut param.sSpatialLayers[..param.iSpatialLayerNum as usize] {
+            let spatial_layer_count_val = spatial_layer_count(&param);
+            for layer in &mut param.sSpatialLayers[..spatial_layer_count_val] {
                 layer.iVideoWidth = width as c_int;
                 layer.iVideoHeight = height as c_int;
             }

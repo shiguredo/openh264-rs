@@ -74,6 +74,8 @@
   - @voluntas
 - [FIX] エンコード出力の `iLayerNum` / `iNalCount` / NAL 長の負値・範囲外を検証するようにする
   - @voluntas
+- [FIX] `iSpatialLayerNum` を安全な範囲に制限する `spatial_layer_count()` ヘルパーを追加する
+  - @voluntas
 
 ### misc
 
