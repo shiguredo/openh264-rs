@@ -466,6 +466,13 @@ impl Decoder {
             let code = lib.call(name, |f: WelsCreateDecoder| f(&mut inner))?;
             Error::check(code, name)?;
 
+            if inner.is_null() {
+                return Err(Error::Openh264Error {
+                    code: -1,
+                    function: name,
+                });
+            }
+
             let mut param = param.assume_init();
             param.pFileNameRestructed = std::ptr::null_mut();
             param.uiTargetDqLayer = 1;
@@ -521,7 +528,7 @@ impl Decoder {
                 });
             }
 
-            Ok(Some(DecodedFrame::from_buffer_info(&info)))
+            Ok(Some(DecodedFrame::from_buffer_info(&info)?))
         }
     }
 
@@ -554,7 +561,7 @@ impl Decoder {
                 });
             }
 
-            Ok(Some(DecodedFrame::from_buffer_info(&info)))
+            Ok(Some(DecodedFrame::from_buffer_info(&info)?))
         }
     }
 }
@@ -591,7 +598,9 @@ pub struct DecodedFrame {
 
 impl DecodedFrame {
     /// OpenH264 の `SBufferInfo` から YUV データをコピーして `DecodedFrame` を構築する
-    unsafe fn from_buffer_info(info: &sys::SBufferInfo) -> Self {
+    ///
+    /// 各プレーンポインタが NULL の場合はエラーを返す。
+    unsafe fn from_buffer_info(info: &sys::SBufferInfo) -> Result<Self, Error> {
         unsafe {
             let width = info.UsrData.sSystemBuffer.iWidth as usize;
             let height = info.UsrData.sSystemBuffer.iHeight as usize;
@@ -604,11 +613,18 @@ impl DecodedFrame {
             let u_size = uv_height * u_stride;
             let v_size = uv_height * v_stride;
 
+            // FFI 側の異常状態で pDst が NULL のまま返される可能性がある
+            if info.pDst[0].is_null() || info.pDst[1].is_null() || info.pDst[2].is_null() {
+                return Err(Error::InvalidParameter(
+                    "decoded frame pDst plane pointer is null".to_string(),
+                ));
+            }
+
             let y_data = std::slice::from_raw_parts(info.pDst[0], y_size).to_vec();
             let u_data = std::slice::from_raw_parts(info.pDst[1], u_size).to_vec();
             let v_data = std::slice::from_raw_parts(info.pDst[2], v_size).to_vec();
 
-            Self {
+            Ok(Self {
                 width,
                 height,
                 y_stride,
@@ -617,7 +633,7 @@ impl DecodedFrame {
                 y_data,
                 u_data,
                 v_data,
-            }
+            })
         }
     }
 
@@ -1158,6 +1174,13 @@ impl Encoder {
             let code = lib.call(name, |f: WelsCreateSVCEncoder| f(&mut inner))?;
             Error::check(code, name)?;
 
+            if inner.is_null() {
+                return Err(Error::Openh264Error {
+                    code: -1,
+                    function: name,
+                });
+            }
+
             let name = "ISVCEncoder.GetDefaultParams";
             let code = (**inner)
                 .GetDefaultParams
@@ -1478,6 +1501,11 @@ impl Encoder {
                     // カウントがゼロの場合には、環境によっては、
                     // pNalLengthInByte が不正なアドレスを指していて from_raw_parts() がクラッシュする
                     // 可能性があるので明示的にハンドリングする
+                    continue;
+                }
+
+                // iNalCount > 0 でもポインタが NULL の可能性がある
+                if layer_info.pNalLengthInByte.is_null() || layer_info.pBsBuf.is_null() {
                     continue;
                 }
 

@@ -66,6 +66,10 @@
 - [FIX] `target_bitrate` が `c_int::MAX / 2` を超えると `iMaxSpatialBitrate` が負値になる問題を修正する
   - `target_bitrate` の上限を `c_int::MAX / 2` に引き下げる
   - @voluntas
+- [FIX] `Decoder::new()` / `Encoder::new()` で FFI ハンドルの NULL チェックを追加する
+  - @voluntas
+- [FIX] デコード済みフレームの YUV プレーンポインタとエンコード済み NAL ポインタの NULL チェックを追加する
+  - @voluntas
 
 ### misc
 
