@@ -57,6 +57,9 @@
   - @voluntas
 - [FIX] `Decoder::decode()` の入力データサイズが `c_int::MAX` を超える場合のチェックを追加する
   - @voluntas
+- [FIX] FFI 境界で `usize` / `NonZeroUsize` から `c_int` / `c_ushort` / `c_uint` への変換時に範囲チェックを追加する
+  - `validate_config()` / `set_bitrate()` / `set_resolution()` で `try_from` による検証を行い、範囲外の値は `Error::InvalidParameter` を返す
+  - @voluntas
 
 ### misc
 

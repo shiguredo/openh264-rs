@@ -865,6 +865,83 @@ fn validate_config(config: &EncoderConfig) -> Result<(), Error> {
         ));
     }
 
+    // FFI 境界の数値範囲チェック: usize / NonZeroUsize から c_int / c_ushort / c_uint への
+    // as キャストはサイレントに切り詰めるため、事前に範囲を検証する
+
+    if c_int::try_from(config.width).is_err() {
+        return Err(Error::InvalidParameter(format!(
+            "width {} exceeds c_int max ({})",
+            config.width,
+            c_int::MAX,
+        )));
+    }
+
+    if c_int::try_from(config.height).is_err() {
+        return Err(Error::InvalidParameter(format!(
+            "height {} exceeds c_int max ({})",
+            config.height,
+            c_int::MAX,
+        )));
+    }
+
+    if c_int::try_from(config.target_bitrate).is_err() {
+        return Err(Error::InvalidParameter(format!(
+            "target_bitrate {} exceeds c_int max ({})",
+            config.target_bitrate,
+            c_int::MAX,
+        )));
+    }
+
+    if let Some(count) = config.ref_frame_count
+        && c_int::try_from(count.get()).is_err()
+    {
+        return Err(Error::InvalidParameter(format!(
+            "ref_frame_count {} exceeds c_int max ({})",
+            count,
+            c_int::MAX,
+        )));
+    }
+
+    if let Some(count) = config.thread_count
+        && c_ushort::try_from(count.get()).is_err()
+    {
+        return Err(Error::InvalidParameter(format!(
+            "thread_count {} exceeds c_ushort max ({})",
+            count,
+            c_ushort::MAX,
+        )));
+    }
+
+    if let Some(layers) = config.spatial_layers
+        && c_int::try_from(layers.get()).is_err()
+    {
+        return Err(Error::InvalidParameter(format!(
+            "spatial_layers {} exceeds c_int max ({})",
+            layers,
+            c_int::MAX,
+        )));
+    }
+
+    if let Some(layers) = config.temporal_layers
+        && c_int::try_from(layers.get()).is_err()
+    {
+        return Err(Error::InvalidParameter(format!(
+            "temporal_layers {} exceeds c_int max ({})",
+            layers,
+            c_int::MAX,
+        )));
+    }
+
+    if let Some(intra) = config.intra_period
+        && c_uint::try_from(intra).is_err()
+    {
+        return Err(Error::InvalidParameter(format!(
+            "intra_period {} exceeds c_uint max ({})",
+            intra,
+            c_uint::MAX,
+        )));
+    }
+
     if let Some(max_qp) = config.max_qp
         && max_qp > 51
     {
@@ -896,10 +973,24 @@ fn validate_config(config: &EncoderConfig) -> Result<(), Error> {
                     "FixedCount slice count must be non-zero".to_string(),
                 ));
             }
+            SliceMode::FixedCount(count) if c_uint::try_from(count).is_err() => {
+                return Err(Error::InvalidParameter(format!(
+                    "FixedCount slice count {} exceeds c_uint max ({})",
+                    count,
+                    c_uint::MAX,
+                )));
+            }
             SliceMode::SizeConstrained(0) => {
                 return Err(Error::InvalidParameter(
                     "SizeConstrained size must be non-zero".to_string(),
                 ));
+            }
+            SliceMode::SizeConstrained(size) if c_uint::try_from(size).is_err() => {
+                return Err(Error::InvalidParameter(format!(
+                    "SizeConstrained size {} exceeds c_uint max ({})",
+                    size,
+                    c_uint::MAX,
+                )));
             }
             _ => {}
         }
@@ -1099,6 +1190,14 @@ impl Encoder {
     /// OpenH264 の `SetOption(ENCODER_OPTION_BITRATE)` を使用する。
     /// 全空間レイヤーに対して一括で適用される。
     pub fn set_bitrate(&mut self, bitrate: usize) -> Result<(), Error> {
+        if c_int::try_from(bitrate).is_err() {
+            return Err(Error::InvalidParameter(format!(
+                "bitrate {} exceeds c_int max ({})",
+                bitrate,
+                c_int::MAX,
+            )));
+        }
+
         unsafe {
             let mut info = sys::SBitrateInfo {
                 iLayer: sys::LAYER_NUM_SPATIAL_LAYER_ALL,
@@ -1159,6 +1258,22 @@ impl Encoder {
             return Err(Error::InvalidParameter(
                 "width and height must be non-zero".to_string(),
             ));
+        }
+
+        if c_int::try_from(width).is_err() {
+            return Err(Error::InvalidParameter(format!(
+                "width {} exceeds c_int max ({})",
+                width,
+                c_int::MAX,
+            )));
+        }
+
+        if c_int::try_from(height).is_err() {
+            return Err(Error::InvalidParameter(format!(
+                "height {} exceeds c_int max ({})",
+                height,
+                c_int::MAX,
+            )));
         }
 
         unsafe {
