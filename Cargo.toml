@@ -2,7 +2,7 @@
 name = "shiguredo_openh264"
 version = "2026.1.0"
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.93"
 description = "Rust binding for OpenH264"
 homepage = "https://github.com/shiguredo/openh264-rs"
 repository = "https://github.com/shiguredo/openh264-rs"
