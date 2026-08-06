@@ -26,13 +26,17 @@ pub const BUILD_REPOSITORY: &str = sys::BUILD_METADATA_REPOSITORY;
 
 /// エラー
 #[derive(Debug)]
-#[allow(missing_docs)]
 pub enum Error {
     /// 共有ライブラリ関連のエラー
     SharedLibraryError(String),
 
     /// openh264 関連のエラー
-    Openh264Error { code: c_int, function: &'static str },
+    Openh264Error {
+        /// openh264 が返したエラーコード
+        code: c_int,
+        /// エラーが発生した関数名
+        function: &'static str,
+    },
 
     /// openh264 の仮想テーブル (vtbl) のメソッドが None だった場合のエラー
     UnavailableMethod(&'static str),
@@ -46,7 +50,10 @@ pub enum Error {
     },
 
     /// デコード結果が I420 以外だった
-    UnsupportedFormat { format: sys::EVideoFormatType },
+    UnsupportedFormat {
+        /// デコード結果の映像フォーマット
+        format: sys::EVideoFormatType,
+    },
 
     /// エンコード時の入力 YUV のサイズが不正だった
     InvalidYuvSize,
@@ -155,7 +162,6 @@ pub struct CodecInfo {
 
 /// H.264 レベル
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(missing_docs)]
 pub enum Level {
     /// Level 1.0
     L1,
@@ -1887,7 +1893,7 @@ mod tests {
             )
             .expect("encode error");
         assert!(encoded.is_some());
-        let encoded = encoded.unwrap();
+        let encoded = encoded.expect("checked above: encode should not return None");
         assert_eq!(encoded.frame_type, FrameType::Idr);
         assert!(!encoded.sps_list.is_empty());
         assert!(!encoded.pps_list.is_empty());
@@ -1973,10 +1979,10 @@ mod tests {
             level: Some(Level::L3_1),
             entropy_coding_mode: Some(EntropyCodingMode::Cabac),
             complexity_mode: Some(ComplexityMode::Medium),
-            ref_frame_count: Some(NonZeroUsize::new(1).unwrap()),
-            thread_count: Some(NonZeroUsize::new(1).unwrap()),
-            spatial_layers: Some(NonZeroUsize::new(1).unwrap()),
-            temporal_layers: Some(NonZeroUsize::new(1).unwrap()),
+            ref_frame_count: Some(NonZeroUsize::new(1).expect("1 is non-zero")),
+            thread_count: Some(NonZeroUsize::new(1).expect("1 is non-zero")),
+            spatial_layers: Some(NonZeroUsize::new(1).expect("1 is non-zero")),
+            temporal_layers: Some(NonZeroUsize::new(1).expect("1 is non-zero")),
             intra_period: Some(30),
             rate_control_mode: Some(RateControlMode::Quality),
             max_qp: Some(40),

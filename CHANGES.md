@@ -18,6 +18,11 @@
 - [CHANGE] MSRV (rust-version) を 1.93 に上げる
   - @voluntas
 
+### misc
+
+- テストの `.unwrap()` を `.expect()` に変更し、不要な `#[allow]` を削除する
+  - @voluntas
+
 ## 2026.1.0
 
 **リリース日**: 2026-03-31

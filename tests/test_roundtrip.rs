@@ -416,8 +416,7 @@ fn dynamic_parameter_change() {
         .encode(&y, &u, &v, &EncodeOptions::default())
         .expect("failed to encode after resolution change");
     assert!(encoded.is_some());
-
-    let encoded = encoded.unwrap();
+    let encoded = encoded.expect("checked above: encode should not return None");
 
     // 解像度変更後は新しい SPS が必要なので IDR になる
     assert_eq!(encoded.frame_type, FrameType::Idr);
