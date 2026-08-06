@@ -473,6 +473,33 @@ fn encoder_rejects_zero_dimensions() {
     assert!(encoder.set_config(config_zero).is_err());
 }
 
+/// レベル 5.2 の最大フレームサイズ (36864 マクロブロック) を超える解像度はエラーを返す
+///
+/// 超える解像度は OpenH264 のエンコーダー初期化で巨大なバッファが確保され、
+/// OOM の原因になるため、バリデーションで事前に拒否する。
+#[test]
+fn encoder_rejects_oversized_dimensions() {
+    let lib = load_library();
+
+    // 4096x2304 (レベル 5.2 の最大フレームサイズちょうど) は通る
+    let config = EncoderConfig::new(4096, 2304, 2_000_000, 30, 1);
+    assert!(Encoder::new(lib.clone(), config).is_ok());
+
+    // 1 ピクセルでも超えるとエラー
+    let config = EncoderConfig::new(4096, 2305, 2_000_000, 30, 1);
+    assert!(Encoder::new(lib.clone(), config).is_err());
+
+    // 極端に大きな解像度もエラー
+    let config = EncoderConfig::new(65535, 65535, 2_000_000, 30, 1);
+    assert!(Encoder::new(lib.clone(), config).is_err());
+
+    // set_resolution でも同じ制限が適用される
+    let config = EncoderConfig::new(64, 64, 100_000, 30, 1);
+    let mut encoder = Encoder::new(lib.clone(), config).expect("failed to create encoder");
+    assert!(encoder.set_resolution(4096, 2304).is_ok());
+    assert!(encoder.set_resolution(4096, 2305).is_err());
+}
+
 /// QP 値の範囲外や min_qp > max_qp の場合にエラーを返す
 #[test]
 fn encoder_rejects_invalid_qp() {

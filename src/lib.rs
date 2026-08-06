@@ -897,15 +897,59 @@ pub struct Encoder {
     fps_denominator: usize,
 }
 
-/// `EncoderConfig` のバリデーション
+/// OpenH264 が対応する最大レベル (5.2) の最大フレームサイズ (ピクセル数)
 ///
-/// `Encoder::new()` と `set_config()` の共通処理。
-fn validate_config(config: &EncoderConfig) -> Result<(), Error> {
-    if config.width == 0 || config.height == 0 {
+/// レベル 5.2 の MaxFS は 36864 マクロブロック (1 マクロブロック = 16x16 ピクセル)。
+/// ライブラリは Constrained Baseline Profile up to Level 5.2 のみ対応しており、
+/// これを超える解像度はエンコーダー内部のバッファ確保が巨大になり OOM の
+/// 原因になるため、事前に拒否する。
+const MAX_FRAME_PIXELS: usize = 4096 * 2304;
+
+/// 解像度のバリデーション
+///
+/// `validate_config()` と `set_resolution()` の共通処理。
+fn validate_dimensions(width: usize, height: usize) -> Result<(), Error> {
+    if width == 0 || height == 0 {
         return Err(Error::InvalidParameter(
             "width and height must be non-zero".to_string(),
         ));
     }
+
+    if c_int::try_from(width).is_err() {
+        return Err(Error::InvalidParameter(format!(
+            "width {} exceeds c_int max ({})",
+            width,
+            c_int::MAX,
+        )));
+    }
+
+    if c_int::try_from(height).is_err() {
+        return Err(Error::InvalidParameter(format!(
+            "height {} exceeds c_int max ({})",
+            height,
+            c_int::MAX,
+        )));
+    }
+
+    // 掛け算のオーバーフローを checked_mul で防ぎつつ、レベル 5.2 の最大フレーム
+    // サイズを超える解像度を拒否する
+    if width
+        .checked_mul(height)
+        .is_none_or(|pixels| pixels > MAX_FRAME_PIXELS)
+    {
+        return Err(Error::InvalidParameter(format!(
+            "frame size {width}x{height} exceeds max ({MAX_FRAME_PIXELS} pixels, level 5.2)",
+        )));
+    }
+
+    Ok(())
+}
+
+/// `EncoderConfig` のバリデーション
+///
+/// `Encoder::new()` と `set_config()` の共通処理。
+fn validate_config(config: &EncoderConfig) -> Result<(), Error> {
+    validate_dimensions(config.width, config.height)?;
 
     if config.fps_numerator == 0 || config.fps_denominator == 0 {
         return Err(Error::InvalidParameter(
@@ -933,22 +977,6 @@ fn validate_config(config: &EncoderConfig) -> Result<(), Error> {
 
     // FFI 境界の数値範囲チェック: usize / NonZeroUsize から c_int / c_ushort / c_uint への
     // as キャストはサイレントに切り詰めるため、事前に範囲を検証する
-
-    if c_int::try_from(config.width).is_err() {
-        return Err(Error::InvalidParameter(format!(
-            "width {} exceeds c_int max ({})",
-            config.width,
-            c_int::MAX,
-        )));
-    }
-
-    if c_int::try_from(config.height).is_err() {
-        return Err(Error::InvalidParameter(format!(
-            "height {} exceeds c_int max ({})",
-            config.height,
-            c_int::MAX,
-        )));
-    }
 
     // iMaxSpatialBitrate = target_bitrate * 2 を c_int にキャストするため、
     // target_bitrate の上限は c_int::MAX / 2
@@ -1360,27 +1388,7 @@ impl Encoder {
     /// OpenH264 の `SetOption(ENCODER_OPTION_SVC_ENCODE_PARAM_EXT)` で
     /// 現在のパラメーターを維持したまま解像度のみ変更する。
     pub fn set_resolution(&mut self, width: usize, height: usize) -> Result<(), Error> {
-        if width == 0 || height == 0 {
-            return Err(Error::InvalidParameter(
-                "width and height must be non-zero".to_string(),
-            ));
-        }
-
-        if c_int::try_from(width).is_err() {
-            return Err(Error::InvalidParameter(format!(
-                "width {} exceeds c_int max ({})",
-                width,
-                c_int::MAX,
-            )));
-        }
-
-        if c_int::try_from(height).is_err() {
-            return Err(Error::InvalidParameter(format!(
-                "height {} exceeds c_int max ({})",
-                height,
-                c_int::MAX,
-            )));
-        }
+        validate_dimensions(width, height)?;
 
         unsafe {
             let mut param = MaybeUninit::<sys::SEncParamExt>::zeroed();

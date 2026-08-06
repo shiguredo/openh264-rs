@@ -15,6 +15,9 @@
   - `pbt/` パッケージ (proptest) でエンコード → デコードのラウンドトリップを検証する
   - `fuzz/` でエンコーダー初期化・動的パラメーター変更・デコードのクラッシュ耐性を検証する
   - @voluntas
+- [FIX] レベル 5.2 の最大フレームサイズを超える解像度でのエンコーダー初期化がメモリ枯渇 (OOM) する問題を修正する
+  - `Encoder::new()` / `set_resolution()` のバリデーションで事前に拒否する
+  - @voluntas
 - [CHANGE] MSRV (rust-version) を 1.93 に上げる
   - @voluntas
 
