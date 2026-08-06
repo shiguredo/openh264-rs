@@ -16,6 +16,14 @@ include = ["/src/**/*", "LICENSE", "README.md", "build.rs"]
 url = "https://github.com/cisco/openh264"
 version = "v2.6.0"
 
+# Property-Based Testing は pbt パッケージで行う
+# fuzz はワークスペースのメンバーにはせず、cargo-fuzz で個別にビルドする
+[workspace]
+members = ["pbt"]
+exclude = ["fuzz"]
+
 [build-dependencies]
+# C ヘッダー (codec_api.h) から FFI バインディングを生成する
 bindgen = "0.72"
+# Cargo.toml の [package.metadata.external-dependencies] を読み込む
 shiguredo_toml = "2026.2"

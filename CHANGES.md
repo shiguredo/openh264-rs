@@ -11,6 +11,10 @@
 
 ## develop
 
+- [ADD] PBT (Property-Based Testing) と fuzzing ターゲットを追加する
+  - `pbt/` パッケージ (proptest) でエンコード → デコードのラウンドトリップを検証する
+  - `fuzz/` でエンコーダー初期化・動的パラメーター変更・デコードのクラッシュ耐性を検証する
+  - @voluntas
 - [CHANGE] MSRV (rust-version) を 1.93 に上げる
   - @voluntas
 
