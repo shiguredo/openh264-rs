@@ -397,7 +397,7 @@ dependencies = [
 
 [[package]]
 name = "shiguredo_openh264"
-version = "2026.2.0-canary.0"
+version = "2026.2.0"
 dependencies = [
  "bindgen",
  "shiguredo_toml",
