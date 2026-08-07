@@ -1,22 +1,29 @@
 [package]
 name = "shiguredo_openh264"
-version = "2026.1.0"
+version = "2026.2.0"
 edition = "2024"
-rust-version = "1.88"
-authors = ["Shiguredo Inc."]
-license = "Apache-2.0"
+rust-version = "1.93"
 description = "Rust binding for OpenH264"
 homepage = "https://github.com/shiguredo/openh264-rs"
 repository = "https://github.com/shiguredo/openh264-rs"
+license = "Apache-2.0"
 build = "build.rs"
-include = ["/src/**/*", "build.rs", "LICENSE", "README.md"]
-
-[build-dependencies]
-bindgen = "0.72"
-shiguredo_toml = "2026.1"
-
+include = ["/src/**/*", "LICENSE", "README.md", "build.rs"]
 
 # 以降は外部ライブラリビルド用のメタデータ
 # (この内容は build.rs の中からのみ参照される)
-[package.metadata.external-dependencies]
-openh264 = { url = "https://github.com/cisco/openh264", version = "v2.6.0" }
+[package.metadata.external-dependencies.openh264]
+url = "https://github.com/cisco/openh264"
+version = "v2.6.0"
+
+# Property-Based Testing は pbt パッケージで行う
+# fuzz はワークスペースのメンバーにはせず、cargo-fuzz で個別にビルドする
+[workspace]
+members = ["pbt"]
+exclude = ["fuzz"]
+
+[build-dependencies]
+# C ヘッダー (codec_api.h) から FFI バインディングを生成する
+bindgen = "0.72"
+# Cargo.toml の [package.metadata.external-dependencies] を読み込む
+shiguredo_toml = "2026.2"

@@ -1,0 +1,37 @@
+[package]
+name = "shiguredo_openh264_fuzz"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[workspace]
+
+[[bin]]
+bench = false
+doc = false
+name = "fuzz_encoder_new"
+path = "fuzz_targets/fuzz_encoder_new.rs"
+test = false
+
+[[bin]]
+bench = false
+doc = false
+name = "fuzz_encoder_set_options"
+path = "fuzz_targets/fuzz_encoder_set_options.rs"
+test = false
+
+[[bin]]
+bench = false
+doc = false
+name = "fuzz_decoder_decode"
+path = "fuzz_targets/fuzz_decoder_decode.rs"
+test = false
+
+[dependencies]
+libfuzzer-sys = "0.4"
+
+[dependencies.shiguredo_openh264]
+path = ".."
