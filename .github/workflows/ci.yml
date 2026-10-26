@@ -11,7 +11,7 @@ on:
       - ".github/workflows/ci.yml"
 
 env:
-  OPENH264_VERSION: "2.6.0"
+  OPENH264_VERSION: "2.7.0"
 
 jobs:
   check:
